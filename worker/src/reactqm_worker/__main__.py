@@ -1,4 +1,4 @@
-"""Standalone diagnostics. Production job transport is intentionally a next phase."""
+"""Diagnostics and the versioned local calculation protocol."""
 import argparse
 import importlib
 import importlib.metadata
@@ -60,8 +60,14 @@ def smoke() -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ReactQM worker diagnostics")
-    parser.add_argument("command", choices=["doctor", "smoke"])
+    parser.add_argument("command", choices=["doctor", "smoke", "calculate"])
+    parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
+    if args.command == "calculate":
+        if args.output_dir is None:
+            parser.error("calculate requires --output-dir")
+        from .calculation import serve
+        raise SystemExit(serve(args.output_dir))
     try:
         result = doctor() if args.command == "doctor" else smoke()
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))

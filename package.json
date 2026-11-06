@@ -11,9 +11,11 @@
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml --locked",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --locked",
     "check:gpu": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example gpu_probe",
+    "test:integration": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example calculation_probe",
     "check:worker": "uv run --project worker --locked python -m reactqm_worker doctor",
     "test:worker": "uv run --project worker --locked python -m unittest discover -s worker/tests",
-    "smoke:chemistry": "uv run --project worker --locked python -m reactqm_worker smoke"
+    "smoke:chemistry": "uv run --project worker --locked python -m reactqm_worker smoke",
+    "test:render": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example render_probe"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
