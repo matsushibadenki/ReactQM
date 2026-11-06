@@ -1,0 +1,20 @@
+[project]
+name = "reactqm-worker"
+version = "0.1.0"
+description = "Isolated CPU quantum chemistry worker for ReactQM"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=2,<3",
+    "scipy>=1.14,<2",
+    "pyscf>=2.8,<3",
+    "ase>=3.24,<4",
+    "rdkit>=2024.9",
+    "h5py>=3.12,<4",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+reactqm-worker = "reactqm_worker.__main__:main"
