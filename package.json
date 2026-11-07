@@ -15,7 +15,9 @@
     "check:worker": "uv run --project worker --locked python -m reactqm_worker doctor",
     "test:worker": "uv run --project worker --locked python -m unittest discover -s worker/tests",
     "smoke:chemistry": "uv run --project worker --locked python -m reactqm_worker smoke",
-    "test:render": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example render_probe"
+    "test:render": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example render_probe",
+    "test:catalog": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example catalog_probe",
+    "test:queue": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example queue_probe"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

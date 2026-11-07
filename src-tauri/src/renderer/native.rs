@@ -92,7 +92,7 @@ impl Viewport {
         let view = unsafe { &*webview.cast::<NSView>() };
         let native = self.attachment.get(mtm);
         let x = b.x.max(0.0);
-        let y = b.y.max(0.0);
+        let y = b.y.max(b.clip_top);
         let right = (b.x + b.width).min(b.window_width);
         let bottom = (b.y + b.height).min(b.window_height);
         let visible = b.visible && right > x && bottom > y && b.width >= 1.0 && b.height >= 1.0;

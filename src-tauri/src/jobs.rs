@@ -16,7 +16,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct JobRequest {
     pub schema_version: u32,
     pub job_id: String,
@@ -29,6 +30,36 @@ pub struct JobRequest {
     pub conv_tol: f64,
 }
 impl JobRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        self.document.validate()?;
+        if self.document.spin != 0 {
+            return Err("rhf_spin".into());
+        }
+        if self.document.atoms.iter().any(|a| a.atomic_number > 10) {
+            return Err("rhf_elements".into());
+        }
+        if self.schema_version != 1
+            || uuid::Uuid::parse_str(&self.job_id)
+                .map_err(|_| "job_invalid")?
+                .to_string()
+                != self.job_id
+            || self.input_hash != self.document.fingerprint()
+            || self.method != "RHF"
+            || self.basis != "sto-3g"
+            || !(1..=50).contains(&self.max_cycle)
+            || !(1e-12..=1e-6).contains(&self.conv_tol)
+        {
+            return Err("job_invalid".into());
+        }
+        Ok(())
+    }
+    pub fn retry(&self, revision: u64) -> Result<Self, String> {
+        self.validate()?;
+        let mut next = self.clone();
+        next.job_id = uuid::Uuid::new_v4().to_string();
+        next.document_revision = revision;
+        Ok(next)
+    }
     pub fn new(document: Document, document_revision: u64) -> Result<Self, String> {
         document.validate()?;
         if document.spin != 0 {
@@ -112,6 +143,7 @@ pub fn execute(
     timeout: Duration,
     mut progress: impl FnMut(u32),
 ) -> Result<Calculation, String> {
+    request.validate()?;
     fs::create_dir_all(directory).map_err(|e| format!("storage: {e}"))?;
     atomic_json(&directory.join("input.json"), request)?;
     if !config.python.is_file() {

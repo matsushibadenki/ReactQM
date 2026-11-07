@@ -1,8 +1,10 @@
 use crate::{
+    layout::PanelLayout,
     project::{Calculation, Project},
     renderer::Renderer,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -19,12 +21,7 @@ pub enum Locale {
     ZhCn,
 }
 
-#[derive(Default)]
-pub struct PanelLayout {
-    pub floating_panel_ids: Vec<String>,
-}
-
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobSnapshot {
     pub id: String,
@@ -53,6 +50,7 @@ pub struct Workspace {
     pub exit_after_job: bool,
     pub job: Option<JobSnapshot>,
     pub active_job: Option<ActiveJob>,
+    pub result_targets: HashMap<String, u64>,
 }
 
 #[derive(Default)]
@@ -80,17 +78,11 @@ pub struct WorkspaceSnapshot {
 }
 
 impl Workspace {
-    pub fn ensure_idle(&self) -> Result<(), String> {
-        if self.active_job.is_some() {
-            Err("busy".into())
-        } else {
-            Ok(())
-        }
-    }
     pub fn replace_project(&mut self, project: Project) -> Result<(), String> {
-        self.ensure_idle()?;
         if project == self.project {
-            self.job = None;
+            if self.active_job.is_none() {
+                self.job = None;
+            }
             self.revision += 1;
             return Ok(());
         }
@@ -102,11 +94,12 @@ impl Workspace {
         self.project = project;
         self.document_revision += 1;
         self.revision += 1;
-        self.job = None;
+        if self.active_job.is_none() {
+            self.job = None;
+        }
         Ok(())
     }
     pub fn history(&mut self, redo: bool) -> Result<(), String> {
-        self.ensure_idle()?;
         let (from, to) = if redo {
             (&mut self.redo, &mut self.undo)
         } else {
@@ -116,8 +109,22 @@ impl Workspace {
         to.push(std::mem::replace(&mut self.project, project));
         self.document_revision += 1;
         self.revision += 1;
-        self.job = None;
+        if self.active_job.is_none() {
+            self.job = None;
+        }
         Ok(())
+    }
+    /// Targets are session-local; a job recovered from a previous app session writes history only.
+    pub fn complete_target(&mut self, id: &str, result: Option<Calculation>) {
+        let target = self.result_targets.remove(id);
+        if target != Some(self.document_revision) {
+            return;
+        }
+        if let (Some(calculation), Some(document)) = (result, self.project.document.as_ref()) {
+            if calculation.job_id == id && calculation.validate(document).is_ok() {
+                self.project.calculation = Some(calculation);
+            }
+        }
     }
     pub fn cancel(&mut self) -> Result<(), String> {
         let active = self.active_job.as_ref().ok_or("no_job")?;
@@ -180,7 +187,7 @@ mod tests {
         assert!(!state.snapshot().can_redo);
     }
     #[test]
-    fn edits_are_rejected_while_running_and_cancel_sets_signal() {
+    fn edits_are_independent_of_running_jobs_and_cancel_sets_signal() {
         let mut state = Workspace {
             active_job: Some(ActiveJob {
                 id: "job".into(),
@@ -188,8 +195,40 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(state.replace_project(project(0.74)).is_err());
+        assert!(state.replace_project(project(0.74)).is_ok());
         state.cancel().unwrap();
         assert!(state.active_job.unwrap().cancel.load(Ordering::SeqCst));
+    }
+    #[test]
+    fn queued_results_cannot_overwrite_edits_or_a_new_session() {
+        let mut state = Workspace::default();
+        state.replace_project(project(0.74)).unwrap();
+        let document = state.project.document.clone().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let calculation = Calculation {
+            job_id: id.clone(),
+            input_hash: document.fingerprint(),
+            method: "RHF".into(),
+            basis: "sto-3g".into(),
+            energy_hartree: -1.1167593074,
+            converged: true,
+            engine_version: "fixture".into(),
+            elapsed_seconds: 0.1,
+        };
+        state.complete_target(&id, Some(calculation.clone()));
+        assert!(state.project.calculation.is_none());
+        state
+            .result_targets
+            .insert(id.clone(), state.document_revision);
+        state.replace_project(project(1.0)).unwrap();
+        state.complete_target(&id, Some(calculation.clone()));
+        assert!(state.project.calculation.is_none());
+        state.replace_project(project(0.74)).unwrap();
+        state
+            .result_targets
+            .insert(id.clone(), state.document_revision);
+        state.complete_target(&id, Some(calculation));
+        assert!(state.project.calculation.is_some());
+        assert!(state.result_targets.is_empty());
     }
 }

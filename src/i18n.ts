@@ -1,12 +1,23 @@
 export type Locale = 'en' | 'ja' | 'zh-CN';
 const en = {
+  dockRight: 'Dock right', dockBottom: 'Dock below', floatPanel: 'Float panel', docking: 'Docking…', showPanel: 'Show floating panel', resetLayout: 'Reset panel layout', movePanel: 'Drag to move or reorder panel', tabPanels: 'Group as tabs', splitPanels: 'Split panels', resizePanels: 'Resize side panels', layoutHelp: 'Drag panel titles to the side or lower dock; drop onto a tab to reorder. Use the panel icons to dock or float without dragging. Close a floating window to return it to its dock. Layout is saved automatically. The molecule stays in the main window.',
+  dismissError: 'Dismiss message',
+  enqueue: 'Add to queue', queue: 'Queue', queued: 'Queued', queuePaused: 'Paused', queueEnabled: 'Enabled', queueEmpty: 'No waiting jobs',
+  pauseQueue: 'Pause queue', resumeQueue: 'Resume queue', cancelQueued: 'Cancel waiting job', moreQueue: 'Show more waiting jobs',
+  queueHelp: 'FIFO, one job at a time. Pause keeps the current job running. After restart, resume to process the saved queue. Inputs are fixed when added; editing the molecule does not change queued jobs. Results remain in history.',
+
+  jobHistory: 'Calculation history', refreshHistory: 'Refresh history', noHistory: 'No calculation records', moreHistory: 'Load older records',
+  restoreResult: 'Restore verified result', retryCalculation: 'Recalculate saved input', retryOf: 'Previous attempt', interrupted: 'Interrupted', corrupt: 'Damaged',
+  legacyRecord: 'Imported record: integrity baseline starts at first import.',
+  historyHelp: 'Results are recorded automatically. Restore verifies input, result and HDF5 checksums. Recalculate queues a new attempt with the saved settings. Interrupted jobs restart from the beginning.',
+
   viewport: 'Molecule in 3D', viewportNative: '3D view · Tauri app', waterSample: 'Load H₂O sample',
   fit: 'Fit molecule (F)', zoomIn: 'Zoom in (+)', zoomOut: 'Zoom out (−)', bonds: 'Show inferred bonds', selectAtom: 'Select next atom (Enter)',
   selectionEmpty: 'No atom selected', bondHints: 'bond hints', viewportError: '3D renderer unavailable',
   viewportHelp: 'Drag / arrow keys: rotate.\nScroll / +/−: zoom.\nF: fit. Click / Enter: select.\nBonds are distance-based hints.\nBond orders are not validated.\nAtom sizes are illustrative.',
 
   workspace: 'Single-point calculation', molecule: 'Molecule', untitled: 'Untitled', empty: 'No molecule', atoms: 'Atoms',
-  native: 'Rust connected', preview: 'Browser preview', connecting: 'Connecting…', language: 'Language', retry: 'Retry',
+  native: 'Ready', preview: 'Browser preview', connecting: 'Connecting…', language: 'Language', retry: 'Retry',
   importTitle: 'Import XYZ', xyz: 'XYZ · Å', apply: 'Apply', open: 'Open XYZ file', sample: 'Load H₂ sample',
   charge: 'Charge', spin: 'Spin (2S)', undo: 'Undo', redo: 'Redo', save: 'Save project', reload: 'Reload saved project',
   saved: 'Saved', loaded: 'Loaded', imported: 'Imported', unsaved: 'Unsaved changes',
@@ -22,13 +33,24 @@ const en = {
 export const messages: Record<Locale, typeof en> = {
   en,
   ja: {
+    dockRight: '右にドック', dockBottom: '下にドック', floatPanel: '独立ウインドウにする', docking: 'ドックへ移動中…', showPanel: '独立パネルを表示', resetLayout: 'パネル配置をリセット', movePanel: 'ドラッグしてパネルを移動・並べ替え', tabPanels: 'タブにまとめる', splitPanels: 'パネルを分割表示', resizePanels: 'サイドパネルの幅を変更', layoutHelp: 'パネル名を右・下のドックへドラッグし、タブ上に重ねると並べ替えます。アイコンからもドック・独立表示を切り替えられます。独立窓を閉じると元のドックへ戻ります。配置は自動保存します。分子表示はメイン窓に保持します。',
+    dismissError: '通知を閉じる',
+    enqueue: '待機列に追加', queue: '待機列', queued: '待機中', queuePaused: '一時停止', queueEnabled: '実行可', queueEmpty: '待機中の計算はありません',
+    pauseQueue: '待機列を一時停止', resumeQueue: '待機列を再開', cancelQueued: '待機中の計算を取り消す', moreQueue: '後続の待機ジョブを表示',
+    queueHelp: '投入順に1件ずつ実行します。一時停止しても実行中の計算は継続します。再起動後は再開操作で待機列を処理します。追加時の入力を保持し、分子を編集しても待機ジョブは変わりません。結果は履歴に残ります。',
+
+    jobHistory: '計算履歴', refreshHistory: '履歴を更新', noHistory: '計算履歴はありません', moreHistory: '以前の履歴を表示',
+    restoreResult: '検証して結果を復元', retryCalculation: '保存条件で再計算', retryOf: '元の計算', interrupted: '中断', corrupt: '破損',
+    legacyRecord: '移行した履歴：初回登録時点を基準に整合性を検証します。',
+    historyHelp: '計算結果は自動で記録します。復元時は入力・結果・HDF5のチェックサムを検証します。再計算は保存条件で新しい試行を待機列に追加します。中断した計算は最初から再実行します。',
+
     viewport: '分子の3D表示', viewportNative: '3D表示 · Tauriアプリ', waterSample: 'H₂Oサンプルを読み込む',
     fit: '全体を表示（F）', zoomIn: '拡大（+）', zoomOut: '縮小（−）', bonds: '推定結合を表示', selectAtom: '次の原子を選択（Enter）',
     selectionEmpty: '原子未選択', bondHints: '推定結合', viewportError: '3D描画を開始できません',
     viewportHelp: 'ドラッグ・矢印キー：回転\nスクロール・+/−：拡大縮小\nF：全体表示\nクリック・Enter：原子選択\n結合は距離による表示用の推定です。\n結合次数は未検証です。\n原子サイズは模式的です。',
 
     workspace: '単一点計算', molecule: '分子', untitled: '名称未設定', empty: '分子なし', atoms: '原子数',
-    native: 'Rust接続済み', preview: 'ブラウザプレビュー', connecting: '接続中…', language: '言語', retry: '再接続',
+    native: '準備完了', preview: 'ブラウザプレビュー', connecting: '接続中…', language: '言語', retry: '再接続',
     importTitle: 'XYZを取り込む', xyz: 'XYZ · Å', apply: '適用', open: 'XYZファイルを開く', sample: 'H₂サンプルを読み込む',
     charge: '電荷', spin: 'スピン（2S）', undo: '元に戻す', redo: 'やり直す', save: 'プロジェクトを保存', reload: '保存済みを再読込',
     saved: '保存しました', loaded: '読み込みました', imported: '取り込みました', unsaved: '未保存の変更',
@@ -42,13 +64,24 @@ export const messages: Record<Locale, typeof en> = {
     error: '操作に失敗しました', details: '詳細', draft: 'XYZ入力',
   },
   'zh-CN': {
+    dockRight: '停靠到右侧', dockBottom: '停靠到底部', floatPanel: '设为独立窗口', docking: '正在停靠…', showPanel: '显示独立面板', resetLayout: '重置面板布局', movePanel: '拖动以移动或排列面板', tabPanels: '合并为标签页', splitPanels: '拆分面板', resizePanels: '调整侧栏宽度', layoutHelp: '将面板标题拖到右侧或底部停靠区，拖到标签上可重新排序。也可用图标停靠或浮动面板。关闭独立窗口会返回原停靠区。布局自动保存，分子视图保留在主窗口。',
+    dismissError: '关闭通知',
+    enqueue: '加入队列', queue: '等待队列', queued: '等待中', queuePaused: '已暂停', queueEnabled: '可执行', queueEmpty: '没有等待任务',
+    pauseQueue: '暂停队列', resumeQueue: '继续队列', cancelQueued: '取消等待任务', moreQueue: '显示后续等待任务',
+    queueHelp: '按加入顺序逐个执行。暂停队列不会停止正在计算的任务。重启后点击继续以处理已保存的队列。输入在加入时固定，编辑分子不会改变等待任务。结果会保存在历史中。',
+
+    jobHistory: '计算历史', refreshHistory: '刷新历史', noHistory: '暂无计算记录', moreHistory: '加载更早记录',
+    restoreResult: '验证并恢复结果', retryCalculation: '按保存条件重新计算', retryOf: '原计算', interrupted: '已中断', corrupt: '已损坏',
+    legacyRecord: '已迁移的记录：完整性基准从首次导入时开始。',
+    historyHelp: '计算结果会自动记录。恢复时验证输入、结果和HDF5校验和。重新计算会按保存的条件将新任务加入队列。中断的计算将从头重新执行。',
+
     viewport: '分子3D视图', viewportNative: '3D视图 · Tauri应用', waterSample: '加载H₂O示例',
     fit: '显示全貌（F）', zoomIn: '放大（+）', zoomOut: '缩小（−）', bonds: '显示推测键', selectAtom: '选择下一个原子（Enter）',
     selectionEmpty: '未选择原子', bondHints: '推测键', viewportError: '无法启动3D渲染',
     viewportHelp: '拖动／方向键：旋转\n滚动／+/−：缩放\nF：显示全貌\n点击／Enter：选择原子\n化学键仅为基于距离的显示推测。\n键级未经验证。\n原子大小仅为示意。',
 
     workspace: '单点计算', molecule: '分子', untitled: '未命名', empty: '无分子', atoms: '原子数',
-    native: 'Rust已连接', preview: '浏览器预览', connecting: '连接中…', language: '语言', retry: '重新连接',
+    native: '已就绪', preview: '浏览器预览', connecting: '连接中…', language: '语言', retry: '重新连接',
     importTitle: '导入XYZ', xyz: 'XYZ · Å', apply: '应用', open: '打开XYZ文件', sample: '加载H₂示例',
     charge: '电荷', spin: '自旋（2S）', undo: '撤销', redo: '重做', save: '保存项目', reload: '重新加载已保存项目',
     saved: '已保存', loaded: '已加载', imported: '已导入', unsaved: '未保存的更改',
@@ -63,6 +96,21 @@ export const messages: Record<Locale, typeof en> = {
   },
 };
 const errors: Record<string, [string, string, string]> = {
+  stale_layout: ['Layout changed in another window. Try again.', '別のウインドウで配置が更新されました。もう一度操作してください。', '其他窗口已更改布局，请重试。'],
+  layout_invalid: ['The saved layout is invalid or newer. Reset the layout to continue.', '保存した配置が不正か、新しい形式です。配置をリセットできます。', '保存的布局无效或版本较新，可重置布局。'],
+  panel_window: ['Could not open the panel window. Reset the layout to recover it.', '独立パネルを開けませんでした。配置のリセットで戻せます。', '无法打开独立面板，可重置布局恢复。'],
+  queue_full: ['The queue holds at most 100 waiting jobs.', '待機中の計算は100件まで登録できます。', '最多可保留100个等待任务。'],
+  queue_stopping: ['The application is shutting down.', 'アプリを終了しています。', '应用正在退出。'],
+  job_not_queued: ['The job has already started or left the queue. Refresh its status.', '計算はすでに開始されたか、待機列から外れました。状態を更新してください。', '任务已开始或已离开队列，请刷新状态。'],
+
+  artifact_invalid: ['Calculation artifacts are missing, changed or damaged. Restore was stopped.', '計算成果物が見つからないか、変更・破損しています。復元を停止しました。', '计算产物缺失、已更改或损坏，已停止恢复。'],
+  job_invalid: ['The saved calculation request is invalid.', '保存された計算条件が不正です。', '保存的计算条件无效。'],
+  job_missing: ['The calculation record was not found.', '計算記録が見つかりません。', '未找到计算记录。'],
+  job_not_succeeded: ['Only completed results can be restored.', '完了した計算結果のみ復元できます。', '仅能恢复已完成的结果。'],
+  job_interrupted: ['The application stopped before completion. Recalculate to start a new attempt.', '完了前にアプリが停止しました。保存条件で再計算できます。', '应用在完成前停止，可按保存条件重新计算。'],
+  workspace_in_use: ['Another application is using this workspace. Close it and restart.', '別のアプリがこの作業領域を使用しています。終了してから再起動してください。', '其他应用正在使用此工作区，请关闭后重启。'],
+  catalog_version: ['This calculation history uses a newer database version.', '計算履歴のデータベースが新しいバージョンで作成されています。', '计算历史数据库由更新版本创建。'],
+
   xyz_size: ['XYZ must be at most 16 KiB.', 'XYZは16 KiB以内にしてください。', 'XYZ不能超过16 KiB。'],
   xyz_header: ['XYZ requires an atom count and a comment line.', 'XYZの先頭に原子数とコメント行が必要です。', 'XYZ需要原子数和注释行。'],
   xyz_count: ['The atom count does not match the rows. Use a single XYZ frame.', '原子数と行数が一致しません。単一フレームのXYZを使用してください。', '原子数与行数不一致，请使用单帧XYZ。'],

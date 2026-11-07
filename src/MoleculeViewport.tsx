@@ -34,10 +34,15 @@ export function MoleculeViewport({ locale, documentRevision, atomCount }: { loca
       dirty = false; inFlight = true;
       const rect = node!.getBoundingClientRect();
       const batch = actions; actions = [];
+      let clipTop = Math.max(0, document.querySelector('[data-app-chrome]')?.getBoundingClientRect().bottom ?? 0);
+      for (const tooltip of document.querySelectorAll('[data-app-chrome] [role="tooltip"]')) {
+        const overlay = tooltip.getBoundingClientRect();
+        if (overlay.width > 0 && overlay.height > 0 && overlay.right > rect.left && overlay.left < rect.right) clipTop = Math.max(clipTop, overlay.bottom);
+      }
       try {
         const next = await invoke<View>('update_viewport', { request: {
           client, attach: !attached, document_revision: current.current.documentRevision,
-          bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height, window_width: innerWidth, window_height: innerHeight, visible: !document.hidden && current.current.atomCount > 0, dark: theme.matches },
+          bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height, window_width: innerWidth, window_height: innerHeight, clip_top: clipTop, visible: !document.hidden && current.current.atomCount > 0, dark: theme.matches },
           actions: batch,
         } });
         attached = true;
@@ -64,10 +69,14 @@ export function MoleculeViewport({ locale, documentRevision, atomCount }: { loca
     const changed = () => queue();
     const observer = new ResizeObserver(changed);
     observer.observe(node); observer.observe(document.body);
+    const chrome = document.querySelector('[data-app-chrome]');
+    if (chrome) observer.observe(chrome);
     window.addEventListener('resize', changed);
     window.addEventListener('scroll', changed, true);
     document.addEventListener('visibilitychange', changed);
     theme.addEventListener('change', changed);
+    const overlayChanged = (event: Event) => { if (event.target instanceof Element && event.target.closest('[data-app-chrome] .info')) queue(); };
+    for (const event of ['pointerover', 'pointerout', 'focusin', 'focusout']) document.addEventListener(event, overlayChanged);
     const nativeWindow = getCurrentWindow();
     const nativeListeners = [nativeWindow.onScaleChanged(changed), nativeWindow.onFocusChanged(changed)];
     for (const listener of nativeListeners) void listener.catch(cause => { if (!disposed) setError(String(cause)); });
@@ -82,6 +91,7 @@ export function MoleculeViewport({ locale, documentRevision, atomCount }: { loca
       disposed = true; cancelAnimationFrame(frame); observer.disconnect();
       window.removeEventListener('resize', changed); window.removeEventListener('scroll', changed, true);
       document.removeEventListener('visibilitychange', changed); theme.removeEventListener('change', changed);
+      for (const event of ['pointerover', 'pointerout', 'focusin', 'focusout']) document.removeEventListener(event, overlayChanged);
       for (const listener of nativeListeners) void listener.then(unlisten => unlisten()).catch(() => {});
       node.removeEventListener('wheel', wheel); schedule.current = () => {};
       if (!inFlight) void invoke('detach_viewport', { client }).catch(() => {});

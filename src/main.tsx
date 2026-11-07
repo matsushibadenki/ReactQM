@@ -5,12 +5,19 @@ import { listen } from '@tauri-apps/api/event';
 import { messages, errorMessage, type Locale } from './i18n';
 import './style.css';
 import { MoleculeViewport } from './MoleculeViewport';
+import { JobHistory } from './JobHistory';
+import { useQueue } from './useQueue';
+import { QueueToolbar } from './QueueToolbar';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useLayout, type PanelId } from './useLayout';
+import { DockWorkspace, FloatingPanel, LayoutTools, panelTitle } from './DockWorkspace';
 
 type Calculation = { job_id: string; input_hash: string; method: string; basis: string; energy_hartree: number; engine_version: string; elapsed_seconds: number; converged: boolean };
-type JobStatus = 'running' | 'cancelling' | 'succeeded' | 'cancelled' | 'failed' | 'timed_out';
+type JobStatus = 'running' | 'cancelling' | 'succeeded' | 'cancelled' | 'failed' | 'timed_out' | 'interrupted' | 'corrupt';
 type Snapshot = { revision: number; documentRevision: number; locale: Locale; atomCount: number; name: string; formula: string; charge: number; spin: number; rendererReady: boolean; canUndo: boolean; canRedo: boolean; dirty: boolean; hasSaved: boolean; calculation: Calculation | null; job: { id: string; status: JobStatus; cycle: number; error: string | null } | null; busy: boolean };
 const initial: Snapshot = { revision: 0, documentRevision: 0, locale: 'ja', atomCount: 0, name: '', formula: '', charge: 0, spin: 0, rendererReady: false, canUndo: false, canRedo: false, dirty: false, hasSaved: false, calculation: null, job: null, busy: false };
 const native = isTauri();
+const windowPanel: PanelId | null = native && getCurrentWindow().label === 'panel-result' ? 'result' : native && getCurrentWindow().label === 'panel-history' ? 'history' : null;
 const hydrogen = '2\nH₂ · 0.74 Å\nH 0 0 0\nH 0 0 0.74\n';
 const water = '3\nH₂O\nO 0 0 0\nH .7586 0 .5043\nH -.7586 0 .5043\n';
 const paths = {
@@ -29,14 +36,17 @@ function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>(initial);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dismissedJobError, setDismissedJobError] = useState<string | null>(null);
   const [notice, setNotice] = useState<'saved' | 'loaded' | 'imported' | null>(null);
   const [pending, setPending] = useState(false);
   const [draft, setDraft] = useState('');
   const [charge, setCharge] = useState('0');
   const [spin, setSpin] = useState('0');
   const file = useRef<HTMLInputElement>(null);
+  const queue = useQueue();
+  const layout = useLayout();
   const t = messages[snapshot.locale];
-  const locked = !connected || snapshot.busy || pending;
+  const locked = !connected || pending;
   const accept = (next: Snapshot) => setSnapshot(current => next.revision >= current.revision ? next : current);
 
   useEffect(() => {
@@ -72,36 +82,10 @@ function App() {
     if (await command('import_xyz', { text, charge: q, spin: s }, 'imported')) setDraft('');
   }
   const jobError = snapshot.job?.error;
-  const shownError = error ?? jobError;
+  const shownError = error ?? layout.error ?? (dismissedJobError === snapshot.job?.id ? null : jobError);
   const result = snapshot.calculation;
 
-  return <main>
-    <header><strong>ReactQM <small>0.1</small></strong>
-      <select aria-label={t.language} value={snapshot.locale} disabled={pending} onChange={event => void changeLocale(event.target.value as Locale)}>
-        <option value="ja">日本語</option><option value="en">English</option><option value="zh-CN">简体中文</option>
-      </select>
-    </header>
-    <div className="page-heading"><h1>{t.workspace}</h1><span className="connection">{connected ? t.native : native ? t.connecting : t.preview}</span></div>
-    <nav className="toolbar" aria-label={t.molecule}>
-      <button title={t.open} aria-label={t.open} disabled={locked} onClick={() => file.current?.click()}><Icon name="open" /></button>
-      <button title={t.sample} aria-label={t.sample} disabled={locked} onClick={() => void importText(hydrogen, true)}>H₂</button>
-      <button title={t.waterSample} aria-label={t.waterSample} disabled={locked} onClick={() => void importText(water, true)}>H₂O</button>
-      <span className="separator" />
-      <button title={t.undo} aria-label={t.undo} disabled={locked || !snapshot.canUndo} onClick={() => void command('history_step', { redo: false })}><Icon name="undo" /></button>
-      <button title={t.redo} aria-label={t.redo} disabled={locked || !snapshot.canRedo} onClick={() => void command('history_step', { redo: true })}><Icon name="redo" /></button>
-      <span className="separator" />
-      <button title={t.save} aria-label={t.save} disabled={locked || !snapshot.atomCount} onClick={() => void command('save_project', {}, 'saved')}><Icon name="save" /></button>
-      <button title={t.reload} aria-label={t.reload} disabled={locked || !snapshot.hasSaved} onClick={() => void command('load_project', {}, 'loaded')}><Icon name="reload" /></button>
-      <Info text={t.saveHelp} />
-    </nav>
-    <input ref={file} className="file-input" type="file" accept=".xyz,text/plain" aria-label={t.open} onChange={async event => {
-      const selected = event.target.files?.[0]; event.target.value = '';
-      if (!selected) return;
-      if (selected.size > 16_384) { setError('xyz_size'); return; }
-      try { await importText(await selected.text()); } catch (cause) { setError(String(cause)); }
-    }} />
-    <div className="workspace-grid">
-      <section aria-labelledby="molecule-title">
+  const moleculePanel = (      <section aria-labelledby="molecule-title">
         <div className="heading"><h2 id="molecule-title">{t.molecule}</h2>{snapshot.dirty ? <span className="dirty" aria-label={t.unsaved} title={t.unsaved}>●</span> : null}</div>
         <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} />
         <div className="molecule-summary"><strong className="formula">{snapshot.formula || '—'}</strong><span>{snapshot.atomCount ? snapshot.name || t.untitled : t.empty}</span></div>
@@ -111,24 +95,59 @@ function App() {
           <textarea id="xyz" aria-label={t.draft} spellCheck={false} value={draft} disabled={locked} maxLength={16_384} placeholder={'2\nH₂\nH 0 0 0\nH 0 0 0.74'} onChange={event => setDraft(event.target.value)} />
           <div className="input-row"><label>{t.charge}<input type="number" step="1" value={charge} disabled={locked} onChange={event => setCharge(event.target.value)} /></label><label>{t.spin}<input type="number" min="0" step="1" value={spin} disabled={locked} onChange={event => setSpin(event.target.value)} /></label><button type="submit" disabled={locked || !draft.trim()}>{t.apply}</button></div>
         </form></details>
-      </section>
-      <section aria-labelledby="calculation-title">
-        <div className="heading"><h2 id="calculation-title">{t.result}</h2><Info text={t.calculationHelp} /></div>
-        <div className="method">RHF <span>/</span> STO-3G</div>
+      </section>);
+  const panels = {
+    result: <><div className="result-help"><Info text={t.calculationHelp} /></div>        <div className="method">RHF <span>/</span> STO-3G</div>
         <div className="calculation-actions">
-          {snapshot.busy ? <button className="primary" disabled={pending || snapshot.job?.status === 'cancelling'} onClick={() => void command('cancel_job')}><Icon name="stop" />{t.cancel}</button>
-            : <button className="primary" disabled={locked || !snapshot.atomCount} onClick={() => void command('start_calculation')}><Icon name="play" />{t.calculate}</button>}
-          <span className={'job-status ' + (snapshot.job?.status || '')} role="status">{snapshot.job ? t[snapshot.job.status] : result ? t.succeeded : t.noResult}</span>
+          <span className="job-status" role="status">{result ? t.succeeded : t.noResult}</span>
         </div>
-        {snapshot.busy ? <div className="progress"><progress aria-label={t.running} /><span>{t.cycle} {snapshot.job?.cycle ?? 0} / 50</span></div> : null}
         {result ? <div className="result">
           <span className="eyebrow">{t.energy}</span><div className="energy"><output>{result.energy_hartree.toFixed(10)}</output><span>Eh</span></div>
           <dl><div><dt>{t.engine}</dt><dd>PySCF {result.engine_version}</dd></div><div><dt>{t.elapsed}</dt><dd>{result.elapsed_seconds.toFixed(2)} s</dd></div></dl>
           <details><summary>{t.provenance}</summary><code>{result.job_id}</code><code>SHA-256 {result.input_hash}</code></details>
         </div> : null}
-      </section>
+</>,
+    history: <JobHistory locale={snapshot.locale} busy={locked} queueState={queue} onAction={command} />,
+  };
+
+  return <main className={windowPanel ? 'utility-window' : undefined}>
+    <div className="app-chrome" data-app-chrome>
+      <header><strong className="app-brand">ReactQM <small>0.1</small></strong>
+        <h1 title={snapshot.name || t.workspace}>{windowPanel ? `${panelTitle(windowPanel, snapshot.locale)} · ${snapshot.name || t.empty}` : snapshot.name || t.workspace}</h1>
+        <span className={'connection-dot ' + (connected ? 'ready' : '')} title={connected ? t.native : native ? t.connecting : t.preview} aria-label={connected ? t.native : native ? t.connecting : t.preview} />
+        <select aria-label={t.language} value={snapshot.locale} disabled={pending} onChange={event => void changeLocale(event.target.value as Locale)}>
+          <option value="ja">日本語</option><option value="en">English</option><option value="zh-CN">简体中文</option>
+        </select>
+      </header>
+      {!windowPanel ? <nav className="toolbar command-bar" aria-label={t.molecule}>
+        <div className="toolbar-group">
+          <button title={t.open} aria-label={t.open} disabled={locked} onClick={() => file.current?.click()}><Icon name="open" /></button>
+          <button title={t.sample} aria-label={t.sample} disabled={locked} onClick={() => void importText(hydrogen, true)}>H₂</button>
+          <button title={t.waterSample} aria-label={t.waterSample} disabled={locked} onClick={() => void importText(water, true)}>H₂O</button>
+        </div>
+        <div className="toolbar-group">
+          <button title={t.undo} aria-label={t.undo} disabled={locked || !snapshot.canUndo} onClick={() => void command('history_step', { redo: false })}><Icon name="undo" /></button>
+          <button title={t.redo} aria-label={t.redo} disabled={locked || !snapshot.canRedo} onClick={() => void command('history_step', { redo: true })}><Icon name="redo" /></button>
+        </div>
+        <div className="toolbar-group">
+          <button title={t.save} aria-label={t.save} disabled={locked || !snapshot.atomCount} onClick={() => void command('save_project', {}, 'saved')}><Icon name="save" /></button>
+          <button title={t.reload} aria-label={t.reload} disabled={locked || !snapshot.hasSaved} onClick={() => void command('load_project', {}, 'loaded')}><Icon name="reload" /></button>
+          <Info text={t.saveHelp} />
+        </div>
+        <button className="primary enqueue-button" disabled={locked || !snapshot.atomCount} onClick={() => void command('start_calculation')}><Icon name="play" />{t.enqueue}</button>
+        <LayoutTools state={layout} locale={snapshot.locale} />
+      </nav> : null}
+      {!windowPanel ? <QueueToolbar locale={snapshot.locale} state={queue} job={snapshot.job} disabled={locked} onAction={command} /> : null}
+      {shownError ? <div className="error app-notification" role="alert"><div className="notification-heading"><span>{errorMessage(shownError, snapshot.locale)}{layout.error ? <button disabled={layout.pending} onClick={() => void layout.update({ kind: 'reset' })}>{t.resetLayout}</button> : null}</span><button type="button" aria-label={t.dismissError} title={t.dismissError} onClick={() => { setError(null); setDismissedJobError(snapshot.job?.id ?? null); }}>×</button></div><details><summary>{t.details}</summary><code>{shownError}</code>{snapshot.job ? <code>{snapshot.job.id}</code> : null}</details></div> : null}
     </div>
-    {shownError ? <div className="error" role="alert">{errorMessage(shownError, snapshot.locale)}<details><summary>{t.details}</summary><code>{shownError}</code>{snapshot.job ? <code>{snapshot.job.id}</code> : null}</details></div> : null}
+    <input ref={file} className="file-input" type="file" accept=".xyz,text/plain" aria-label={t.open} onChange={async event => {
+      const selected = event.target.files?.[0]; event.target.value = '';
+      if (!selected) return;
+      if (selected.size > 16_384) { setError('xyz_size'); return; }
+      try { await importText(await selected.text()); } catch (cause) { setError(String(cause)); }
+    }} />
+    {windowPanel ? <FloatingPanel panel={windowPanel} state={layout} locale={snapshot.locale}>{panels[windowPanel]}</FloatingPanel> : <DockWorkspace state={layout} locale={snapshot.locale} molecule={moleculePanel} panels={panels} />}
+
     <footer><span role="status">{notice ? t[notice] : !native ? t.previewHelp : ''}</span>{native && !connected ? <button onClick={() => void command('workspace_snapshot')}>{t.retry}</button> : null}</footer>
   </main>;
 }

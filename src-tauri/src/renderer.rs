@@ -17,6 +17,8 @@ pub struct Bounds {
     pub height: f64,
     pub window_width: f64,
     pub window_height: f64,
+    #[serde(default)]
+    pub clip_top: f64,
     pub visible: bool,
     pub dark: bool,
 }
@@ -29,6 +31,7 @@ impl Bounds {
             self.height,
             self.window_width,
             self.window_height,
+            self.clip_top,
         ]
         .iter()
         .any(|v| !v.is_finite() || v.abs() > 100_000.0)
@@ -36,6 +39,7 @@ impl Bounds {
             || self.height < 0.0
             || self.window_width < 0.0
             || self.window_height < 0.0
+            || self.clip_top < 0.0
         {
             return Err("viewport_bounds".into());
         }
