@@ -20,6 +20,8 @@ const native = isTauri();
 const windowPanel: PanelId | null = native && getCurrentWindow().label === 'panel-result' ? 'result' : native && getCurrentWindow().label === 'panel-history' ? 'history' : null;
 const hydrogen = '2\nH₂ · 0.74 Å\nH 0 0 0\nH 0 0 0.74\n';
 const water = '3\nH₂O\nO 0 0 0\nH .7586 0 .5043\nH -.7586 0 .5043\n';
+const carbonDioxide = '3\nCO₂\nO -1.16 0 0\nC 0 0 0\nO 1.16 0 0\n';
+const nitrogen = '2\nN₂\nN -.55 0 0\nN .55 0 0\n';
 const paths = {
   open: 'M3 7h6l2-3h5v4H5v12h14l2-10H7L5 20',
   save: 'M5 3h12l4 4v14H3V3h2Zm2 0v6h10V3M7 21v-8h10v8',
@@ -89,11 +91,11 @@ function App() {
         <div className="heading"><h2 id="molecule-title">{t.molecule}</h2>{snapshot.dirty ? <span className="dirty" aria-label={t.unsaved} title={t.unsaved}>●</span> : null}</div>
         <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} />
         <div className="molecule-summary"><strong className="formula">{snapshot.formula || '—'}</strong><span>{snapshot.atomCount ? snapshot.name || t.untitled : t.empty}</span></div>
-        <dl className="metrics"><div><dt>{t.atoms}</dt><dd>{snapshot.atomCount}</dd></div><div><dt>{t.charge}</dt><dd>{snapshot.charge}</dd></div><div><dt>{t.spin}</dt><dd>{snapshot.spin}</dd></div></dl>
+        <dl className="metrics"><div><dt>{t.atoms}</dt><dd>{snapshot.atomCount}</dd></div><div><dt>{t.charge} <Info text={t.chargeHelp} /></dt><dd>{snapshot.charge === 0 ? `0 · ${t.neutral}` : snapshot.charge > 0 ? `+${snapshot.charge}` : `−${Math.abs(snapshot.charge)}`}</dd></div><div><dt>{t.spin}</dt><dd>{snapshot.spin}</dd></div></dl>
         <details className="xyz-editor"><summary>{t.importTitle}</summary><form onSubmit={event => { event.preventDefault(); void importText(draft); }}>
-          <div className="heading"><label htmlFor="xyz">{t.xyz}</label><Info text={t.inputHelp} /></div>
+          <div className="heading"><label htmlFor="xyz">{t.xyz}</label><div className="input-help"><Info text={t.chargeHelp} /><Info text={t.inputHelp} /></div></div>
           <textarea id="xyz" aria-label={t.draft} spellCheck={false} value={draft} disabled={locked} maxLength={16_384} placeholder={'2\nH₂\nH 0 0 0\nH 0 0 0.74'} onChange={event => setDraft(event.target.value)} />
-          <div className="input-row"><label>{t.charge}<input type="number" step="1" value={charge} disabled={locked} onChange={event => setCharge(event.target.value)} /></label><label>{t.spin}<input type="number" min="0" step="1" value={spin} disabled={locked} onChange={event => setSpin(event.target.value)} /></label><button type="submit" disabled={locked || !draft.trim()}>{t.apply}</button></div>
+          <div className="input-row"><label><span>{t.charge}</span><input type="number" step="1" value={charge} disabled={locked} onChange={event => setCharge(event.target.value)} /></label><label>{t.spin}<input type="number" min="0" step="1" value={spin} disabled={locked} onChange={event => setSpin(event.target.value)} /></label><button type="submit" disabled={locked || !draft.trim()}>{t.apply}</button></div>
         </form></details>
       </section>);
   const panels = {
@@ -124,6 +126,8 @@ function App() {
           <button title={t.open} aria-label={t.open} disabled={locked} onClick={() => file.current?.click()}><Icon name="open" /></button>
           <button title={t.sample} aria-label={t.sample} disabled={locked} onClick={() => void importText(hydrogen, true)}>H₂</button>
           <button title={t.waterSample} aria-label={t.waterSample} disabled={locked} onClick={() => void importText(water, true)}>H₂O</button>
+          <button title={t.carbonDioxideSample} aria-label={t.carbonDioxideSample} disabled={locked} onClick={() => void importText(carbonDioxide, true)}>CO₂</button>
+          <button title={t.nitrogenSample} aria-label={t.nitrogenSample} disabled={locked} onClick={() => void importText(nitrogen, true)}>N₂</button>
         </div>
         <div className="toolbar-group">
           <button title={t.undo} aria-label={t.undo} disabled={locked || !snapshot.canUndo} onClick={() => void command('history_step', { redo: false })}><Icon name="undo" /></button>

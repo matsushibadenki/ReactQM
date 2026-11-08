@@ -9,10 +9,15 @@ pub struct DisplayAtom {
     pub color: [f32; 4],
     pub atomic_number: u8,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayBond {
+    pub atoms: [usize; 2],
+    pub order: u8,
+}
 #[derive(Default)]
 pub struct Scene {
     pub atoms: Vec<DisplayAtom>,
-    pub bonds: Vec<[usize; 2]>,
+    pub bonds: Vec<DisplayBond>,
     pub center: Vec3,
     pub radius: f32,
 }
@@ -76,7 +81,10 @@ impl Scene {
                         + COVALENT_RADII[b.atomic_number as usize]);
                 let distance = a.position.distance(b.position);
                 if distance > 0.1 && distance <= cutoff {
-                    bonds.push([j, i]);
+                    bonds.push(DisplayBond {
+                        atoms: [j, i],
+                        order: 1,
+                    });
                 }
             }
         }
@@ -87,7 +95,38 @@ impl Scene {
             radius,
         }
     }
+    pub fn set_bonds(&mut self, bonds: Vec<DisplayBond>) -> Result<(), String> {
+        let mut pairs = std::collections::BTreeSet::new();
+        for bond in &bonds {
+            let [a, b] = bond.atoms;
+            if a >= self.atoms.len()
+                || b >= self.atoms.len()
+                || a == b
+                || !(1..=3).contains(&bond.order)
+                || !pairs.insert((a.min(b), a.max(b)))
+            {
+                return Err("valence_protocol".into());
+            }
+        }
+        self.bonds = bonds;
+        Ok(())
+    }
+    pub fn bond_instance_count(&self) -> u32 {
+        self.bonds
+            .iter()
+            .map(|bond| u32::from(bond.order) * 2)
+            .sum()
+    }
     pub fn instances(&self, selected: Option<usize>, show_bonds: bool) -> Vec<Instance> {
+        self.instances_for_camera(selected, show_bonds, &Camera::default(), 1.0)
+    }
+    pub fn instances_for_camera(
+        &self,
+        selected: Option<usize>,
+        show_bonds: bool,
+        camera: &Camera,
+        aspect: f32,
+    ) -> Vec<Instance> {
         let mut instances = Vec::new();
         for (index, atom) in self.atoms.iter().enumerate() {
             let color = if selected == Some(index) {
@@ -105,25 +144,50 @@ impl Scene {
             ));
         }
         if show_bonds {
-            for [i, j] in &self.bonds {
-                let a = &self.atoms[*i];
-                let b = &self.atoms[*j];
+            let eye = camera.eye(self.radius, aspect);
+            for bond in &self.bonds {
+                let [i, j] = bond.atoms;
+                let a = &self.atoms[i];
+                let b = &self.atoms[j];
                 let delta = b.position - a.position;
                 let length = delta.length();
-                let rotation = Quat::from_rotation_arc(Vec3::Y, delta / length);
-                // Two half cylinders use each endpoint's element color.
-                for (fraction, color) in [(0.25, a.color), (0.75, b.color)] {
-                    instances.push(Instance::new(
-                        Mat4::from_scale_rotation_translation(
-                            Vec3::new(0.085, length * 0.5, 0.085),
-                            rotation,
-                            a.position + delta * fraction - self.center,
-                        ),
-                        color,
-                    ));
+                let direction = delta / length;
+                let rotation = Quat::from_rotation_arc(Vec3::Y, direction);
+                // Offset perpendicular to the view and bond, so parallel rods remain
+                // separated when orbiting. The fallback handles an end-on bond.
+                let view = (eye - ((a.position + b.position) * 0.5 - self.center)).normalize();
+                let mut side = direction.cross(view);
+                if side.length_squared() < 1e-8 {
+                    side = direction.cross(if direction.y.abs() < 0.9 {
+                        Vec3::Y
+                    } else {
+                        Vec3::X
+                    });
+                }
+                side = side.normalize();
+                let (radius, spacing) = match bond.order {
+                    1 => (0.085, 0.0),
+                    2 => (0.052, 0.23),
+                    _ => (0.044, 0.16),
+                };
+                for rod in 0..bond.order {
+                    let offset =
+                        side * (f32::from(rod) - f32::from(bond.order - 1) * 0.5) * spacing;
+                    // Each rod retains the two endpoint element colors.
+                    for (fraction, color) in [(0.25, a.color), (0.75, b.color)] {
+                        instances.push(Instance::new(
+                            Mat4::from_scale_rotation_translation(
+                                Vec3::new(radius, length * 0.5, radius),
+                                rotation,
+                                a.position + delta * fraction + offset - self.center,
+                            ),
+                            color,
+                        ));
+                    }
                 }
             }
         }
+
         instances
     }
     pub fn pick(&self, camera: &Camera, aspect: f32, x: f32, y: f32) -> Option<usize> {
@@ -236,6 +300,68 @@ mod tests {
         assert_eq!(Scene::from_document(Some(&h2)).bonds.len(), 1);
         let separated = Document::from_xyz("2\nH2\nH 0 0 0\nH 0 0 3", 0, 0).unwrap();
         assert!(Scene::from_document(Some(&separated)).bonds.is_empty());
+    }
+    #[test]
+    fn multiple_bond_rods_are_finite_distinct_and_counted_for_every_view() {
+        let doc = Document::from_xyz("2\nC2\nC -.6 0 0\nC .6 0 0", 0, 0).unwrap();
+        let mut scene = Scene::from_document(Some(&doc));
+        for order in 1..=3 {
+            scene
+                .set_bonds(vec![DisplayBond {
+                    atoms: [0, 1],
+                    order,
+                }])
+                .unwrap();
+            assert_eq!(scene.bond_instance_count(), u32::from(order) * 2);
+            assert_eq!(scene.instances(None, false).len(), 2);
+            for aspect in [0.35, 1.0, 3.0] {
+                for (yaw, pitch) in [
+                    (0.0, 0.0),
+                    (0.85, 0.28),
+                    (std::f32::consts::FRAC_PI_2, 0.0),
+                    (3.0, 1.48),
+                ] {
+                    let camera = Camera {
+                        yaw,
+                        pitch,
+                        zoom: 1.0,
+                    };
+                    let instances = scene.instances_for_camera(None, true, &camera, aspect);
+                    assert_eq!(instances.len(), 2 + usize::from(order) * 2);
+                    assert!(instances
+                        .iter()
+                        .all(|i| Mat4::from_cols_array_2d(&i.model).is_finite()
+                            && Mat4::from_cols_array_2d(&i.normal).is_finite()));
+                    let matrix = camera.matrix(scene.radius, aspect);
+                    let points: Vec<_> = (0..order)
+                        .map(|rod| {
+                            let model = Mat4::from_cols_array_2d(
+                                &instances[2 + usize::from(rod) * 2].model,
+                            );
+                            matrix.project_point3(model.w_axis.truncate())
+                        })
+                        .collect();
+                    for pair in points.windows(2) {
+                        assert!(pair[0].truncate().distance(pair[1].truncate()) > 0.005);
+                    }
+                }
+            }
+        }
+        let saved = scene.bonds.clone();
+        assert!(scene
+            .set_bonds(vec![DisplayBond {
+                atoms: [0, 2],
+                order: 2
+            }])
+            .is_err());
+        assert!(scene
+            .set_bonds(vec![DisplayBond {
+                atoms: [0, 1],
+                order: 4
+            }])
+            .is_err());
+        assert!(scene.set_bonds(vec![saved[0], saved[0]]).is_err());
+        assert_eq!(scene.bonds, saved);
     }
     #[test]
     fn fit_keeps_atoms_inside_portrait_and_landscape_frusta() {

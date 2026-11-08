@@ -17,7 +17,8 @@
     "smoke:chemistry": "uv run --project worker --locked python -m reactqm_worker smoke",
     "test:render": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example render_probe",
     "test:catalog": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example catalog_probe",
-    "test:queue": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example queue_probe"
+    "test:queue": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example queue_probe",
+    "test:bond-render": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example bond_render_probe"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

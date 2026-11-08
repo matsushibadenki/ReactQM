@@ -401,7 +401,7 @@ impl RenderCore {
             self.sphere.draw(&mut pass, 0..atoms);
             if show_bonds {
                 self.cylinder
-                    .draw(&mut pass, atoms..atoms + scene.bonds.len() as u32 * 2);
+                    .draw(&mut pass, atoms..atoms + scene.bond_instance_count());
             }
         }
         gpu.queue.submit(Some(encoder.finish()));

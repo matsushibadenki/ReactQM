@@ -160,9 +160,10 @@ impl Viewport {
                 return Err(error.to_string());
             }
         };
-        let binding = self
-            .core
-            .upload(gpu, &scene.instances(selected, show_bonds));
+        let binding = self.core.upload(
+            gpu,
+            &scene.instances_for_camera(selected, show_bonds, camera, (b.width / b.height) as f32),
+        );
         self.core.draw(
             gpu,
             &frame.texture.create_view(&Default::default()),

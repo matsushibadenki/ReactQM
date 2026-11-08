@@ -4,7 +4,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { messages, type Locale } from './i18n';
 
 type Action = { kind: 'orbit'; dx: number; dy: number } | { kind: 'zoom'; delta: number } | { kind: 'pick'; x: number; y: number } | { kind: 'fit' | 'bonds' | 'select_next' };
-type View = { ready: boolean; documentRevision: number; selected: { index: number; symbol: string; position: number[] } | null; showBonds: boolean; bondCount: number; pixelSize: number[]; frameCount: number };
+type Valence = { documentRevision: number; index: number; status: 'inferred' | 'unsupported' | 'failed'; reason: string | null; engineVersion: string; valence: number | null; formalCharge: number | null; neighbors: number | null };
+type View = { ready: boolean; documentRevision: number; selected: { index: number; symbol: string; position: number[]; inferredNeighbors: number } | null; showBonds: boolean; bondCount: number; bondSource: 'rdkit' | 'geometry'; bondStatus: string; bondEngineVersion: string | null; doubleBondCount: number; tripleBondCount: number; pixelSize: number[]; frameCount: number };
 const icons = { fit: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M8 12h8m-4-4v8', plus: 'M12 5v14M5 12h14', minus: 'M5 12h14', bonds: 'm7 7 10 10M9 5l10 10M7 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6m10 10a3 3 0 1 0 0 6 3 3 0 0 0 0-6', atom: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18m0 6v6m-3-3h6' };
 function Glyph({ name }: { name: keyof typeof icons }) { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d={icons[name]} /></svg>; }
 
@@ -12,6 +13,26 @@ export function MoleculeViewport({ locale, documentRevision, atomCount }: { loca
   const t = messages[locale];
   const element = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View | null>(null);
+  const [valence, setValence] = useState<Valence | null>(null);
+  const [valenceError, setValenceError] = useState<string | null>(null);
+  const [analysisAttempt, setAnalysisAttempt] = useState(0);
+  const lastAnalysisAttempt = useRef(0);
+  const [bondAttempt, setBondAttempt] = useState(0);
+  const [bondLoading, setBondLoading] = useState(false);
+  const [bondError, setBondError] = useState<string | null>(null);
+  const lastBondAttempt = useRef(0);
+  const selectedIndex = view?.documentRevision === documentRevision ? view.selected?.index : undefined;
+  useEffect(() => {
+    setValence(null); setValenceError(null);
+    if (!isTauri() || selectedIndex === undefined) return;
+    let disposed = false;
+    const retry = analysisAttempt !== lastAnalysisAttempt.current;
+    lastAnalysisAttempt.current = analysisAttempt;
+    void invoke<Valence>('atom_valence', { expectedRevision: documentRevision, index: selectedIndex, retry }).then(result => {
+      if (!disposed && result.documentRevision === documentRevision && result.index === selectedIndex) { setValence(result); schedule.current(); }
+    }).catch(cause => { if (!disposed) setValenceError(String(cause)); });
+    return () => { disposed = true; };
+  }, [documentRevision, selectedIndex, analysisAttempt]);
   const [error, setError] = useState<string | null>(null);
   const schedule = useRef<(action?: Action) => void>(() => {});
   const current = useRef({ documentRevision, atomCount });
@@ -21,6 +42,20 @@ export function MoleculeViewport({ locale, documentRevision, atomCount }: { loca
     current.current = { documentRevision, atomCount };
     schedule.current();
   }, [documentRevision, atomCount]);
+  useEffect(() => {
+    setBondError(null);
+    if (!isTauri() || !atomCount) { setBondLoading(false); return; }
+    let disposed = false;
+    const retry = bondAttempt !== lastBondAttempt.current;
+    lastBondAttempt.current = bondAttempt;
+    setBondLoading(true);
+    void invoke<{ documentRevision: number }>('analyze_bonds', { expectedRevision: documentRevision, retry }).catch(cause => {
+      if (!disposed) setBondError(String(cause));
+    }).finally(() => {
+      if (!disposed) { setBondLoading(false); schedule.current(); }
+    });
+    return () => { disposed = true; };
+  }, [documentRevision, atomCount, bondAttempt]);
   useEffect(() => {
     const node = element.current;
     if (!isTauri() || !node) return;
@@ -99,6 +134,11 @@ export function MoleculeViewport({ locale, documentRevision, atomCount }: { loca
   }, []);
   const enabled = isTauri() && atomCount > 0;
   const selected = view?.documentRevision === documentRevision ? view.selected : null;
+  const bondView = view?.documentRevision === documentRevision ? view : null;
+  const orderedBonds = bondView?.bondSource === 'rdkit';
+  const atomValence = valence?.documentRevision === documentRevision && valence.index === selected?.index ? valence : null;
+  const analysisStatus = atomValence?.status === 'inferred' ? t.valenceInferred : atomValence?.status === 'unsupported' ? t.valenceUnsupported : atomValence?.status === 'failed' || valenceError ? t.valenceFailed : t.valenceAnalyzing;
+  const analysisReason = valenceError === 'worker_missing' ? t.valenceWorkerMissing : valenceError?.startsWith('valence_timeout') ? t.valenceTimeout : atomValence?.reason === 'open_shell' ? t.valenceOpenShell : atomValence?.reason === 'element' ? t.valenceElement : t.valenceNoAssignment;
   const button = (icon: keyof typeof icons, label: string, action: Action, pressed?: boolean) => <button type="button" title={label} aria-label={label} aria-pressed={pressed} disabled={!enabled} onClick={() => schedule.current(action)}><Glyph name={icon} /></button>;
   return <div className="molecular-view">
     <div ref={element} className="native-viewport" tabIndex={0} role="group" aria-label={t.viewport} aria-describedby="viewport-help"
@@ -131,9 +171,20 @@ export function MoleculeViewport({ locale, documentRevision, atomCount }: { loca
       <button type="button" className="info" aria-label={t.viewportHelp}>ⓘ<span role="tooltip" id="viewport-help">{t.viewportHelp}</span></button>
     </div>
     <div className="viewport-status" role="status">
-      {selected ? <><strong>{selected.symbol} · {selected.index}</strong><span>{selected.position.map(value => value.toFixed(3)).join(', ')} Å</span></> : <span>{t.selectionEmpty}</span>}
-      <small title={t.bonds}>{view?.documentRevision === documentRevision ? view.bondCount : 0} {t.bondHints}</small>
+      {selected ? <><strong>{selected.symbol} · {t.atomLabel} {selected.index}</strong><span>{selected.position.map(value => value.toFixed(3)).join(', ')} Å</span></> : <span>{t.selectionEmpty}</span>}
+      <small title={t.bonds}>{bondView?.bondCount ?? 0} {orderedBonds ? t.bondCountLabel : t.bondHints}</small>
     </div>
+    {atomCount > 0 ? <div className="bond-source-status" role="status">
+      <span>{orderedBonds ? `${t.bondSourceRdkit} · ${bondView?.bondEngineVersion ?? ''}` : t.bondSourceGeometry}</span>
+      {orderedBonds ? <small>{t.doubleBonds} {bondView?.doubleBondCount ?? 0} · {t.tripleBonds} {bondView?.tripleBondCount ?? 0}</small> : <small>{bondLoading ? t.valenceAnalyzing : bondError || bondView?.bondStatus === 'failed' ? t.valenceFailed : bondView?.bondStatus === 'unsupported' ? t.valenceUnsupported : ''}</small>}
+      {!orderedBonds && !bondLoading && !selected ? <button type="button" disabled={!isTauri()} onClick={() => setBondAttempt(attempt => attempt + 1)}>{t.retryValence}</button> : null}
+    </div> : null}
+    {selected ? <div className="atom-inspector" aria-label={t.atomProperties}>
+      <div className="atom-analysis"><dl><div><dt>{t.valence}</dt><dd>{atomValence?.status === 'inferred' ? atomValence.valence : '—'} <small>{analysisStatus}</small></dd></div>{atomValence?.status === 'inferred' ? <div><dt>{t.formalCharge}</dt><dd>{atomValence.formalCharge! > 0 ? `+${atomValence.formalCharge}` : atomValence.formalCharge}</dd></div> : null}<div><dt>{t.inferredNeighbors}</dt><dd>{selected.inferredNeighbors}</dd></div></dl>
+      {atomValence?.engineVersion ? <small className="valence-provenance">RDKit {atomValence.engineVersion}</small> : null}
+      {valenceError || atomValence?.status === 'failed' || atomValence?.status === 'unsupported' ? <p className="valence-reason" role="status">{analysisReason}<button type="button" onClick={() => setAnalysisAttempt(attempt => attempt + 1)}>{t.retryValence}</button></p> : null}</div>
+      <button type="button" className="info" aria-label={t.valenceHelp}>ⓘ<span role="tooltip">{t.valenceHelp}</span></button>
+    </div> : atomCount > 0 ? <p className="atom-selection-hint">{t.selectAtomHint}</p> : null}
     {error ? <div className="viewport-error" role="alert">{t.viewportError}<button type="button" onClick={() => schedule.current()}>{t.retry}</button><details><summary>{t.details}</summary><code>{error}</code></details></div> : null}
   </div>;
 }

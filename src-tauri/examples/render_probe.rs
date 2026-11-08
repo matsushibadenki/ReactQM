@@ -39,7 +39,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let binding = core.upload(&gpu, &scene.instances(selected, bonds));
+        let binding = core.upload(
+            &gpu,
+            &scene.instances_for_camera(
+                selected,
+                bonds,
+                &camera,
+                if name == "cropped" {
+                    512.0 / 384.0
+                } else {
+                    width as f32 / height as f32
+                },
+            ),
+        );
         core.draw(
             &gpu,
             &texture.create_view(&Default::default()),

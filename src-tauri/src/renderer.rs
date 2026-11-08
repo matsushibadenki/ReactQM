@@ -72,14 +72,21 @@ pub struct ViewportSnapshot {
     pub selected: Option<Selection>,
     pub show_bonds: bool,
     pub bond_count: usize,
+    pub bond_source: String,
+    pub bond_status: String,
+    pub bond_engine_version: Option<String>,
+    pub double_bond_count: usize,
+    pub triple_bond_count: usize,
     pub pixel_size: [u32; 2],
     pub frame_count: u64,
 }
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Selection {
     pub index: usize,
     pub symbol: String,
     pub position: [f64; 3],
+    pub inferred_neighbors: usize,
 }
 
 pub struct Renderer {
@@ -88,6 +95,7 @@ pub struct Renderer {
     viewport: Option<native::Viewport>,
     pub context: Option<GpuContext>,
     scene: Scene,
+    bond_analysis: Option<(String, Option<String>)>,
     camera: Camera,
     selected: Option<usize>,
     show_bonds: bool,
@@ -102,6 +110,7 @@ impl Default for Renderer {
             viewport: None,
             context: None,
             scene: Scene::default(),
+            bond_analysis: None,
             camera: Camera::default(),
             selected: None,
             show_bonds: true,
@@ -112,6 +121,30 @@ impl Default for Renderer {
     }
 }
 impl Renderer {
+    fn sync_scene(&mut self, document: Option<&Document>, revision: u64) {
+        if self.document_revision != Some(revision) {
+            self.scene = Scene::from_document(document);
+            self.camera = Camera::default();
+            self.selected = None;
+            self.bond_analysis = None;
+            self.document_revision = Some(revision);
+        }
+    }
+    /// CPU-only update under AppState; native/GPU work remains on the main thread.
+    pub(crate) fn apply_bond_analysis(
+        &mut self,
+        document: &Document,
+        revision: u64,
+        status: String,
+        version: Option<String>,
+        bonds: Option<Vec<scene::DisplayBond>>,
+    ) -> Result<(), String> {
+        self.sync_scene(Some(document), revision);
+        let replacement = bonds.unwrap_or_else(|| Scene::from_document(Some(document)).bonds);
+        self.scene.set_bonds(replacement)?;
+        self.bond_analysis = Some((status, version));
+        Ok(())
+    }
     pub fn ready(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
@@ -156,17 +189,12 @@ impl Renderer {
         if self.context.is_none() {
             self.context = Some(pollster::block_on(GpuContext::initialize())?);
         }
+        self.sync_scene(document, revision);
         let gpu = self.context.as_ref().unwrap();
         if self.viewport.is_none() {
             self.viewport = Some(native::Viewport::new(gpu, webview)?);
         }
         let viewport = self.viewport.as_mut().unwrap();
-        if self.document_revision != Some(revision) {
-            self.scene = Scene::from_document(document);
-            self.camera = Camera::default();
-            self.selected = None;
-            self.document_revision = Some(revision);
-        }
         let aspect = (request.bounds.width / request.bounds.height.max(1.0)).max(0.001) as f32;
         // Never apply queued picking/rotation against a replacement document.
         if request.document_revision == revision {
@@ -216,6 +244,12 @@ impl Renderer {
                 index: index + 1,
                 symbol: self.scene.symbol(index).into(),
                 position: doc.atoms[index].position_angstrom,
+                inferred_neighbors: self
+                    .scene
+                    .bonds
+                    .iter()
+                    .filter(|bond| bond.atoms.contains(&index))
+                    .count(),
             })
         });
         Ok(ViewportSnapshot {
@@ -224,8 +258,72 @@ impl Renderer {
             selected,
             show_bonds: self.show_bonds,
             bond_count: self.scene.bonds.len(),
+            bond_source: if self
+                .bond_analysis
+                .as_ref()
+                .is_some_and(|(status, _)| status == "inferred")
+            {
+                "rdkit"
+            } else {
+                "geometry"
+            }
+            .into(),
+            bond_status: self
+                .bond_analysis
+                .as_ref()
+                .map_or("pending", |(status, _)| status.as_str())
+                .into(),
+            bond_engine_version: self
+                .bond_analysis
+                .as_ref()
+                .and_then(|(_, version)| version.clone()),
+            double_bond_count: self.scene.bonds.iter().filter(|b| b.order == 2).count(),
+            triple_bond_count: self.scene.bonds.iter().filter(|b| b.order == 3).count(),
             pixel_size: viewport.pixel_size(),
             frame_count: self.frames,
         })
+    }
+}
+
+#[cfg(test)]
+mod bond_tests {
+    use super::*;
+    #[test]
+    fn assignment_replaces_hints_without_resetting_view_and_clears_on_revision() {
+        let doc = Document::from_xyz("3\nCO2\nO -1.16 0 0\nC 0 0 0\nO 1.16 0 0", 0, 0).unwrap();
+        let mut renderer = Renderer::default();
+        renderer.sync_scene(Some(&doc), 7);
+        renderer.camera.orbit(30.0, 20.0);
+        renderer.selected = Some(1);
+        let yaw = renderer.camera.yaw;
+        renderer
+            .apply_bond_analysis(
+                &doc,
+                7,
+                "inferred".into(),
+                Some("fixture".into()),
+                Some(vec![
+                    scene::DisplayBond {
+                        atoms: [0, 1],
+                        order: 2,
+                    },
+                    scene::DisplayBond {
+                        atoms: [1, 2],
+                        order: 2,
+                    },
+                ]),
+            )
+            .unwrap();
+        assert_eq!(renderer.scene.bond_instance_count(), 8);
+        assert_eq!(renderer.selected, Some(1));
+        assert_eq!(renderer.camera.yaw, yaw);
+        renderer
+            .apply_bond_analysis(&doc, 7, "failed".into(), None, None)
+            .unwrap();
+        assert_eq!(renderer.scene.bond_instance_count(), 4);
+        assert_eq!(renderer.camera.yaw, yaw);
+        renderer.sync_scene(Some(&doc), 8);
+        assert!(renderer.bond_analysis.is_none());
+        assert_eq!(renderer.selected, None);
     }
 }

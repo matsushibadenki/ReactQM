@@ -122,7 +122,7 @@ impl WorkerConfig {
     }
 }
 
-struct OwnedChild(Child);
+pub(crate) struct OwnedChild(pub(crate) Child);
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         // The Unix group is created exclusively for this job, including future subprocesses.

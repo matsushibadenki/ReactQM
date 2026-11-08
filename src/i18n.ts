@@ -1,5 +1,9 @@
 export type Locale = 'en' | 'ja' | 'zh-CN';
 const en = {
+  carbonDioxideSample: 'Load CO₂ sample (double bonds)', nitrogenSample: 'Load N₂ sample (triple bond)',
+  bondSourceRdkit: 'RDKit bond orders · estimated', bondSourceGeometry: 'Distance hints · orders unassigned', bondCountLabel: 'bonds', doubleBonds: 'Double', tripleBonds: 'Triple',
+  valenceInferred: 'Estimated', valenceAnalyzing: 'Analyzing…', valenceUnsupported: 'Unsupported', valenceFailed: 'Could not assign', formalCharge: 'Formal charge (estimated)', retryValence: 'Retry analysis', valenceOpenShell: 'Open-shell systems are not supported.', valenceElement: 'This structure contains unsupported elements.', valenceNoAssignment: 'Check coordinates, explicit hydrogens and molecular charge.', valenceTimeout: 'Analysis timed out.', valenceWorkerMissing: 'Python Worker environment is missing.',
+  atomLabel: 'Atom', atomProperties: 'Selected atom', valence: 'Valence', undetermined: 'Undetermined', inferredNeighbors: 'Inferred neighbors', selectAtomHint: 'Select an atom to inspect its bonding information.', valenceHelp: 'RDKit estimates bond orders from XYZ coordinates and molecular charge. Valence is the bond-order sum for this atom; formal charge is a separate estimate. All hydrogens must be explicit. Closed-shell H/B/C/N/O/F/Si/P/S/Cl/Br/I only. This is a structural hypothesis, not a quantum result. 3D bonds and neighbor counts follow the RDKit assignment when available; otherwise they use distance hints. Aromatic rings show one Kekulé assignment.', neutral: 'neutral', chargeHelp: 'Net charge of the whole molecule, in elementary-charge units. 0 is neutral; +1 means one electron removed; −1 means one electron added. This is not an individual atom’s valence.',
   dockRight: 'Dock right', dockBottom: 'Dock below', floatPanel: 'Float panel', docking: 'Docking…', showPanel: 'Show floating panel', resetLayout: 'Reset panel layout', movePanel: 'Drag to move or reorder panel', tabPanels: 'Group as tabs', splitPanels: 'Split panels', resizePanels: 'Resize side panels', layoutHelp: 'Drag panel titles to the side or lower dock; drop onto a tab to reorder. Use the panel icons to dock or float without dragging. Close a floating window to return it to its dock. Layout is saved automatically. The molecule stays in the main window.',
   dismissError: 'Dismiss message',
   enqueue: 'Add to queue', queue: 'Queue', queued: 'Queued', queuePaused: 'Paused', queueEnabled: 'Enabled', queueEmpty: 'No waiting jobs',
@@ -12,14 +16,14 @@ const en = {
   historyHelp: 'Results are recorded automatically. Restore verifies input, result and HDF5 checksums. Recalculate queues a new attempt with the saved settings. Interrupted jobs restart from the beginning.',
 
   viewport: 'Molecule in 3D', viewportNative: '3D view · Tauri app', waterSample: 'Load H₂O sample',
-  fit: 'Fit molecule (F)', zoomIn: 'Zoom in (+)', zoomOut: 'Zoom out (−)', bonds: 'Show inferred bonds', selectAtom: 'Select next atom (Enter)',
+  fit: 'Fit molecule (F)', zoomIn: 'Zoom in (+)', zoomOut: 'Zoom out (−)', bonds: 'Show bonds', selectAtom: 'Select next atom (Enter)',
   selectionEmpty: 'No atom selected', bondHints: 'bond hints', viewportError: '3D renderer unavailable',
-  viewportHelp: 'Drag / arrow keys: rotate.\nScroll / +/−: zoom.\nF: fit. Click / Enter: select.\nBonds are distance-based hints.\nBond orders are not validated.\nAtom sizes are illustrative.',
+  viewportHelp: 'Drag / arrow keys: rotate.\nScroll / +/−: zoom.\nF: fit. Click / Enter: select.\nRDKit estimates: double / triple bonds use 2 / 3 rods.\nWithout an assignment, bonds are distance hints.\nAromatic rings use one Kekulé assignment.\nAtom sizes are illustrative.',
 
   workspace: 'Single-point calculation', molecule: 'Molecule', untitled: 'Untitled', empty: 'No molecule', atoms: 'Atoms',
   native: 'Ready', preview: 'Browser preview', connecting: 'Connecting…', language: 'Language', retry: 'Retry',
   importTitle: 'Import XYZ', xyz: 'XYZ · Å', apply: 'Apply', open: 'Open XYZ file', sample: 'Load H₂ sample',
-  charge: 'Charge', spin: 'Spin (2S)', undo: 'Undo', redo: 'Redo', save: 'Save project', reload: 'Reload saved project',
+  charge: 'Molecular charge', spin: 'Spin (2S)', undo: 'Undo', redo: 'Redo', save: 'Save project', reload: 'Reload saved project',
   saved: 'Saved', loaded: 'Loaded', imported: 'Imported', unsaved: 'Unsaved changes',
   calculate: 'Run calculation', cancel: 'Cancel calculation', result: 'Calculation', noResult: 'No result',
   running: 'Calculating', cancelling: 'Cancelling', succeeded: 'Converged', cancelled: 'Cancelled', failed: 'Failed', timed_out: 'Timed out',
@@ -33,6 +37,10 @@ const en = {
 export const messages: Record<Locale, typeof en> = {
   en,
   ja: {
+    carbonDioxideSample: 'CO₂サンプルを読み込む（二重結合）', nitrogenSample: 'N₂サンプルを読み込む（三重結合）',
+    bondSourceRdkit: 'RDKit結合次数（推定）', bondSourceGeometry: '距離推定のみ・次数未判定', bondCountLabel: '結合', doubleBonds: '二重', tripleBonds: '三重',
+    valenceInferred: '自動推定', valenceAnalyzing: '判定中…', valenceUnsupported: '対象外', valenceFailed: '判定できません', formalCharge: '形式電荷（推定）', retryValence: '再判定', valenceOpenShell: '開殻系は未対応です。', valenceElement: '未対応の元素が含まれています。', valenceNoAssignment: '座標・水素原子・分子の電荷を確認してください。', valenceTimeout: '判定が時間切れになりました。', valenceWorkerMissing: 'Python Worker環境が見つかりません。',
+    atomLabel: '原子', atomProperties: '選択した原子の情報', valence: '原子価', undetermined: '未判定', inferredNeighbors: '推定接続数', selectAtomHint: '原子を選ぶと結合情報を表示します。', valenceHelp: 'RDKitがXYZ座標と分子電荷から結合次数を推定し、選択原子の結合次数の和を原子価として表示します。形式電荷は別の推定値です。水素を含む全原子の座標が必要です。閉殻系のH/B/C/N/O/F/Si/P/S/Cl/Br/Iが対象です。構造の推定であり、量子計算の結果ではありません。3D結合と接続数にもRDKit推定を反映します。判定前・失敗時は距離由来に戻り、芳香族は一つのケクレ構造で表示します。', neutral: '中性', chargeHelp: '分子全体の正味の電荷です。単位は電気素量で、0は中性、+1は電子が1個少ない状態、−1は電子が1個多い状態を表します。個々の原子の原子価とは異なります。',
     dockRight: '右にドック', dockBottom: '下にドック', floatPanel: '独立ウインドウにする', docking: 'ドックへ移動中…', showPanel: '独立パネルを表示', resetLayout: 'パネル配置をリセット', movePanel: 'ドラッグしてパネルを移動・並べ替え', tabPanels: 'タブにまとめる', splitPanels: 'パネルを分割表示', resizePanels: 'サイドパネルの幅を変更', layoutHelp: 'パネル名を右・下のドックへドラッグし、タブ上に重ねると並べ替えます。アイコンからもドック・独立表示を切り替えられます。独立窓を閉じると元のドックへ戻ります。配置は自動保存します。分子表示はメイン窓に保持します。',
     dismissError: '通知を閉じる',
     enqueue: '待機列に追加', queue: '待機列', queued: '待機中', queuePaused: '一時停止', queueEnabled: '実行可', queueEmpty: '待機中の計算はありません',
@@ -45,14 +53,14 @@ export const messages: Record<Locale, typeof en> = {
     historyHelp: '計算結果は自動で記録します。復元時は入力・結果・HDF5のチェックサムを検証します。再計算は保存条件で新しい試行を待機列に追加します。中断した計算は最初から再実行します。',
 
     viewport: '分子の3D表示', viewportNative: '3D表示 · Tauriアプリ', waterSample: 'H₂Oサンプルを読み込む',
-    fit: '全体を表示（F）', zoomIn: '拡大（+）', zoomOut: '縮小（−）', bonds: '推定結合を表示', selectAtom: '次の原子を選択（Enter）',
+    fit: '全体を表示（F）', zoomIn: '拡大（+）', zoomOut: '縮小（−）', bonds: '結合を表示', selectAtom: '次の原子を選択（Enter）',
     selectionEmpty: '原子未選択', bondHints: '推定結合', viewportError: '3D描画を開始できません',
-    viewportHelp: 'ドラッグ・矢印キー：回転\nスクロール・+/−：拡大縮小\nF：全体表示\nクリック・Enter：原子選択\n結合は距離による表示用の推定です。\n結合次数は未検証です。\n原子サイズは模式的です。',
+    viewportHelp: 'ドラッグ・矢印キー：回転\nスクロール・+/−：拡大縮小\nF：全体表示\nクリック・Enter：原子選択\nRDKit推定：二重は2本、三重は3本で表示。\n判定前・失敗時は距離由来の結合です。\n芳香族は一つのケクレ構造を表示します。\n原子サイズは模式的です。',
 
     workspace: '単一点計算', molecule: '分子', untitled: '名称未設定', empty: '分子なし', atoms: '原子数',
     native: '準備完了', preview: 'ブラウザプレビュー', connecting: '接続中…', language: '言語', retry: '再接続',
     importTitle: 'XYZを取り込む', xyz: 'XYZ · Å', apply: '適用', open: 'XYZファイルを開く', sample: 'H₂サンプルを読み込む',
-    charge: '電荷', spin: 'スピン（2S）', undo: '元に戻す', redo: 'やり直す', save: 'プロジェクトを保存', reload: '保存済みを再読込',
+    charge: '分子の電荷', spin: 'スピン（2S）', undo: '元に戻す', redo: 'やり直す', save: 'プロジェクトを保存', reload: '保存済みを再読込',
     saved: '保存しました', loaded: '読み込みました', imported: '取り込みました', unsaved: '未保存の変更',
     calculate: '計算を実行', cancel: '計算を取り消す', result: '計算', noResult: '結果なし',
     running: '計算中', cancelling: '取消中', succeeded: '収束済み', cancelled: '取消済み', failed: '失敗', timed_out: '時間切れ',
@@ -64,6 +72,10 @@ export const messages: Record<Locale, typeof en> = {
     error: '操作に失敗しました', details: '詳細', draft: 'XYZ入力',
   },
   'zh-CN': {
+    carbonDioxideSample: '加载CO₂示例（双键）', nitrogenSample: '加载N₂示例（三键）',
+    bondSourceRdkit: 'RDKit键级（推测）', bondSourceGeometry: '仅距离推测・键级未定', bondCountLabel: '个键', doubleBonds: '双键', tripleBonds: '三键',
+    valenceInferred: '自动推测', valenceAnalyzing: '判定中…', valenceUnsupported: '不支持', valenceFailed: '无法判定', formalCharge: '形式电荷（推测）', retryValence: '重新判定', valenceOpenShell: '暂不支持开壳层体系。', valenceElement: '结构包含暂不支持的元素。', valenceNoAssignment: '请检查坐标、显式氢原子和分子电荷。', valenceTimeout: '判定超时。', valenceWorkerMissing: '未找到Python Worker环境。',
+    atomLabel: '原子', atomProperties: '所选原子信息', valence: '原子价', undetermined: '未判定', inferredNeighbors: '推测连接数', selectAtomHint: '选择原子以查看成键信息。', valenceHelp: 'RDKit根据XYZ坐标及分子电荷推测键级，以所选原子的键级总和显示原子价。形式电荷是另一推测值。须显式包含所有氢原子。仅支持闭壳层H/B/C/N/O/F/Si/P/S/Cl/Br/I。这是结构假设，并非量子计算结果。3D化学键与连接数使用RDKit推测结果；未判定或失败时按距离显示。芳香环显示一种凯库勒结构。', neutral: '中性', chargeHelp: '整个分子的净电荷，单位为元电荷。0表示中性，+1表示少一个电子，−1表示多一个电子。这不是单个原子的原子价。',
     dockRight: '停靠到右侧', dockBottom: '停靠到底部', floatPanel: '设为独立窗口', docking: '正在停靠…', showPanel: '显示独立面板', resetLayout: '重置面板布局', movePanel: '拖动以移动或排列面板', tabPanels: '合并为标签页', splitPanels: '拆分面板', resizePanels: '调整侧栏宽度', layoutHelp: '将面板标题拖到右侧或底部停靠区，拖到标签上可重新排序。也可用图标停靠或浮动面板。关闭独立窗口会返回原停靠区。布局自动保存，分子视图保留在主窗口。',
     dismissError: '关闭通知',
     enqueue: '加入队列', queue: '等待队列', queued: '等待中', queuePaused: '已暂停', queueEnabled: '可执行', queueEmpty: '没有等待任务',
@@ -76,14 +88,14 @@ export const messages: Record<Locale, typeof en> = {
     historyHelp: '计算结果会自动记录。恢复时验证输入、结果和HDF5校验和。重新计算会按保存的条件将新任务加入队列。中断的计算将从头重新执行。',
 
     viewport: '分子3D视图', viewportNative: '3D视图 · Tauri应用', waterSample: '加载H₂O示例',
-    fit: '显示全貌（F）', zoomIn: '放大（+）', zoomOut: '缩小（−）', bonds: '显示推测键', selectAtom: '选择下一个原子（Enter）',
+    fit: '显示全貌（F）', zoomIn: '放大（+）', zoomOut: '缩小（−）', bonds: '显示化学键', selectAtom: '选择下一个原子（Enter）',
     selectionEmpty: '未选择原子', bondHints: '推测键', viewportError: '无法启动3D渲染',
-    viewportHelp: '拖动／方向键：旋转\n滚动／+/−：缩放\nF：显示全貌\n点击／Enter：选择原子\n化学键仅为基于距离的显示推测。\n键级未经验证。\n原子大小仅为示意。',
+    viewportHelp: '拖动／方向键：旋转\n滚动／+/−：缩放\nF：显示全貌\n点击／Enter：选择原子\nRDKit推测：双键显示为2根，三键为3根。\n未判定或失败时仅按距离显示。\n芳香环显示一种凯库勒结构。\n原子大小仅为示意。',
 
     workspace: '单点计算', molecule: '分子', untitled: '未命名', empty: '无分子', atoms: '原子数',
     native: '已就绪', preview: '浏览器预览', connecting: '连接中…', language: '语言', retry: '重新连接',
     importTitle: '导入XYZ', xyz: 'XYZ · Å', apply: '应用', open: '打开XYZ文件', sample: '加载H₂示例',
-    charge: '电荷', spin: '自旋（2S）', undo: '撤销', redo: '重做', save: '保存项目', reload: '重新加载已保存项目',
+    charge: '分子电荷', spin: '自旋（2S）', undo: '撤销', redo: '重做', save: '保存项目', reload: '重新加载已保存项目',
     saved: '已保存', loaded: '已加载', imported: '已导入', unsaved: '未保存的更改',
     calculate: '运行计算', cancel: '取消计算', result: '计算', noResult: '无结果',
     running: '计算中', cancelling: '正在取消', succeeded: '已收敛', cancelled: '已取消', failed: '失败', timed_out: '超时',

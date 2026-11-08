@@ -7,6 +7,7 @@ pub mod project;
 pub mod renderer;
 pub mod scheduler;
 pub mod state;
+pub mod valence;
 
 use catalog::{Catalog, CatalogState, JobPage, QueuePage};
 use document::Document;
@@ -349,6 +350,9 @@ fn detach_viewport(window: tauri::WebviewWindow, client: String) -> Result<(), S
 }
 
 fn stop_execution(app: &tauri::AppHandle, request_exit: bool) -> bool {
+    app.state::<valence::ValenceService>()
+        .stopping
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     app.state::<panel_windows::LayoutService>()
         .closing
         .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -376,6 +380,7 @@ fn stop_execution(app: &tauri::AppHandle, request_exit: bool) -> bool {
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(valence::ValenceService::default())
         .manage(Scheduler::default())
         .manage(panel_windows::LayoutService::default())
         .setup(|app| {
@@ -393,6 +398,8 @@ pub fn run() {
             update_viewport,
             detach_viewport,
             workspace_snapshot,
+            valence::atom_valence,
+            valence::analyze_bonds,
             panel_windows::layout_snapshot,
             panel_windows::update_layout,
             set_locale,
@@ -437,6 +444,7 @@ pub fn run() {
             }
             if let tauri::RunEvent::Exit = event {
                 stop_execution(app, false);
+                valence::shutdown(app);
                 app.state::<Scheduler>().join();
             }
             if let tauri::RunEvent::ExitRequested { api, .. } = event {

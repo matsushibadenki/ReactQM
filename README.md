@@ -103,13 +103,32 @@ macOSではRustが所有するwgpu / Metal描画面をWebViewの予約領域に�
 - ドラッグ／矢印キー：回転。スクロール／＋・−：拡大縮小。
 - 全体表示ボタン／F／Home：カメラを初期位置へ戻す。
 - 原子をクリック／Enter／原子選択ボタン：選択。元素・1始まりの番号・Å座標を表示。
+- 原子を選択するとRDKitが原子価を自動推定し、形式電荷・RDKitバージョンも表示します。「推定接続数」は従来の距離由来の表示用結合の隣接数として分離します。ⓘをhover／focusすると説明します。
+- 「分子の電荷」は分子全体の正味の電荷。0は中性、正は+、負は−を付けて表示します。原子価とは別の量です。
 - 結合アイコン：距離から推定した結合の表示切替。説明はⓘのhover／focusに表示。
 
-結合は `距離 ≤ 1.2 × 共有結合半径の和` による表示用の推定で、希ガスを除外します。結合次数・価数の検証は行いません。原子の大きさも模式的です。カメラ・選択・結合の表示設定は保存されず、分子変更時はカメラと選択をリセットします。
+上部の **CO₂** サンプルで二重結合、**N₂** サンプルで三重結合をすぐ確認できます。分子の読み込み時にRDKitが結合次数を自動推定します。二重結合は2本、三重結合は3本の平行な棒で表示し、端点は各元素の色で描きます。回転に合わせて棒の並びを調整します。芳香環は一つのケクレ構造として単／二重を表示し、非局在化を確定する図ではありません。
 
-English: Drag or use arrow keys to rotate, scroll or +/− to zoom, F to fit, click or Enter to select atoms. Bonds are geometry-based visual hints, not validated chemical bond orders. The 3D surface currently requires the macOS Tauri application.
+判定前・対象外・失敗時は `距離 ≤ 1.2 × 共有結合半径の和` による表示用結合へ戻し（希ガスを除外）、「距離推定のみ・次数未判定」と表示します。RDKit反映時にはバージョンと二重／三重の件数を表示します。結合表示ボタンで全結合を隠せます。原子の大きさも模式的です。カメラ・選択・結合の表示設定は保存されず、分子変更時はカメラと選択をリセットします。
 
-简体中文：拖动或方向键旋转，滚动或+/−缩放，F显示全貌，点击或Enter选择原子。化学键仅为基于几何距离的显示推测，并非经过验证的键级。3D视图目前需要macOS Tauri应用。
+English: Drag or use arrow keys to rotate, scroll or +/− to zoom, F to fit, click or Enter to select atoms. RDKit-estimated double/triple bonds use 2/3 parallel rods; aromatic rings use one Kekulé assignment. Before/without assignment, the UI identifies distance-based hints with unassigned orders. The 3D surface currently requires the macOS Tauri application.
+
+简体中文：拖动或方向键旋转，滚动或+/−缩放，F显示全貌，点击或Enter选择原子。RDKit推测的双键／三键以2／3根平行棒显示，芳香环使用一种凯库勒结构。未判定或失败时，会明确标记为仅按距离显示、键级未定。3D视图目前需要macOS Tauri应用。
+
+2026-11-08：原子価と電荷を区別する表示を追加。用語は[IUPACの原子価の定義](https://goldbook.iupac.org/terms/view/V06588)を参照しました。当初は原子価を未判定と表示していましたが、現在は下記の自動推定に対応しています。macOS実画面のH₂O選択でOの推定接続数2、Hの1を確認しました。UIは日英中・320／375／1100px・明暗・キーボード説明表示を検証。Rustテスト31件＋プロセステスト2件は直列実行で成功しました。並列実行では既存の履歴再生成テストが一度`workspace_in_use`で失敗しており、並列テストの安定性は継続確認します。
+
+## 原子価の自動推定
+
+分子の読み込み時（原子の選択前）に、Rustが独立Python WorkerのRDKitへXYZ座標と分子電荷を渡し、`DetermineBonds`で結合次数を推定します。原子価はその原子の結合次数の和として表示します。たとえばCO₂のCは接続相手が2個でも原子価は4、H₂OのOは2となります。形式電荷は別の推定値です。[RDKitの結合推定API](https://www.rdkit.org/docs/source/rdkit.Chem.rdDetermineBonds.html)と[原子価検証](https://www.rdkit.org/docs/RDKit_Book.html#valence-calculation-and-allowed-valences)を使用します。
+
+- 水素を省略せず、全原子の座標を入力してください。対応は閉殻系（2S=0）のH/B/C/N/O/F/Si/P/S/Cl/Br/Iです。量子計算の対応元素・手法の制限は従来どおりです。
+- 値には「自動推定」とRDKit版を併記します。未対応元素・開殻系は「対象外」、不整合な座標／電荷や未割当は「判定できません」とし、値を捏造しません。Worker不在・10秒timeoutの案内と再判定ボタンがあります。
+- 最大64原子、探索は1000反復。重い処理はRustの文書ロック外で実行し、最大8入力をセッション内キャッシュします。座標・全結合配列はUIへ転送しません。Undo／復元／別文書への切替で古い値を反映しません。
+- これは座標と電荷に基づく構造仮説で、共鳴構造や電子状態の一意性・物理的正しさを保証しません。量子計算、プロジェクト保存内容、Undoは変更しません。3Dには推定結合次数を反映します。再起動後は現在のRDKitで再推定します。
+
+English: Selecting an atom automatically estimates its valence (bond-order sum) and formal charge using RDKit and the whole molecule’s charge. Explicit hydrogens and supported closed-shell main-group atoms are required. Results are labeled estimates with the RDKit version; unsupported/failed cases show a reason and retry action. 3D uses the estimated orders when available, with an explicitly labeled distance-hint fallback.
+
+简体中文：选择原子后，RDKit根据坐标及分子总电荷自动推测原子价（键级总和）和形式电荷。须显式包含氢原子，并仅支持指定的闭壳层主族体系。结果标明推测及RDKit版本，不支持或失败时显示原因并可重试。3D显示成功推测的键级，否则明确标记为距离推测。
 
 ## 現在の計算範囲
 
@@ -154,8 +173,11 @@ npm run test:queue
 npm run check:worker
 npm run check:gpu
 npm run test:render
+npm run test:bond-render
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 ```
+
+`test:bond-render` は実RDKitのCO₂／N₂の結合次数をRustで保持し、wgpuで描画します。単／二重／三重の棒を画像断面で数え、部分表示の画素一致・回転・明暗・縦長も確認します。画像は `/private/tmp/reactqm-bond-render/` に出力し、`REACTQM_BOND_RENDER_OUTPUT` で出力先を変更できます。真正面から結合軸を見た際の原子による遮蔽は通常の3D表示どおりです。
 
 `test:rust` のプロセステストには `worker/.venv` が必要です。`test:integration` は実際にRustからWorkerを起動し、H₂計算・HDF5生成・結果の保存／再読込まで確認します。`check:gpu` はadapter / deviceの初期化です。`test:render` は実GPUで通常・部分表示・選択・回転／暗色・縦長の5画像を描き、空白画像・元素色・選択色・部分表示の画素一致を検証します。画像は `/private/tmp/reactqm-render/` に出力し、`REACTQM_RENDER_OUTPUT` で出力先を変更できます。画素の読み戻しは検証用Rustプロセス内に限定しています。
 
@@ -164,8 +186,8 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D w
 | 確認内容 | 結果 |
 |---|---|
 | Web型検査・本番ビルド、macOS開発用.app | 成功 |
-| Rust unit 31件 + process 2件 | 成功。履歴・復元・破損拒否・取消競合・別プロセス終了・排他・ページ分割・既存検証基準の維持を含む |
-| Python 4件 | 成功 |
+| Rust unit 34件 + process 2件 | 成功。履歴・復元・破損拒否・取消競合・別プロセス終了・排他・ページ分割・既存検証基準の維持を含む |
+| Python 7件 | 成功 |
 | Clippy / all-targets / warnings-as-errors | 成功 |
 | Rust→Worker→PySCF→HDF5→保存／再読込 | 成功、H₂ −1.1167593073964257 hartree |
 | Worker異常系 | 異常終了・不正／過大応答・別job ID・未収束・無応答／大量出力のtimeout・取消と子プロセス回収を確認 |
@@ -180,6 +202,8 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D w
 | キューのTauri実画面 | H₂／H₂O追加・待機取消・再起動・一時停止・実行中終了・後続保持・H₂O再開と結果復元を確認 |
 | 固定ツールバー | 主要操作とキュー操作を上部固定。Metalの切り取りとポップアップを含むスクロールを確認 |
 | 履歴の画面レイアウト | 画面検査用データで日英中、320 / 375 / 1100px、明暗、ページ分割／再読込、長い名前、操作不可状態を確認。consoleエラーなし |
+| 二重／三重結合描画 | 実RDKit→GPUでCO₂二重・N₂三重の棒を画素断面で確認（1／2／3本）。部分スクロールの画素一致、回転・暗色・縦長、従来5描画ケースを確認。macOS実画面でCO₂／N₂自動反映・表示切替・回転・原子選択も確認 |
+| 自動原子価 | 実RDKitで単／二重／三重／芳香族・荷電分子・失敗例、Rust経由CO₂とtimeout／取消、3言語UIの再判定・遅延応答破棄を検証。macOS実画面でCO₂のC＝4・形式電荷0・接続数2・RDKit版を確認 |
 | パネルの実画面 | 結果／履歴の独立窓、閉じた際の再ドック、下部タブ、起動時の配置復元、独立履歴からの共有文書復元、実H₂Oの結果表示を確認 |
 | パネルのブラウザ検証 | 実ポインタドラッグ・キーボード幅調整、タブ／分割／移動、日英中 × 320 / 375 / 1100px × 明暗。横はみ出し・consoleエラーなし |
 | HiDPI・画面間移動 | ⭕️ [Pending] 1×環境で実機確認。実Retina・異倍率画面間移動・ネイティブ暗色合成は未確認 |
