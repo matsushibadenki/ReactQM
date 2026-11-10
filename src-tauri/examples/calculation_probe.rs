@@ -27,6 +27,7 @@ fn main() -> Result<(), String> {
         return Err("Missing HDF5 artifact".into());
     }
     let project = Project {
+        settings: Default::default(),
         document: Some(document),
         calculation: Some(result.clone()),
     };

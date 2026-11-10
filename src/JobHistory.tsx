@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { messages, errorMessage, type Locale } from './i18n';
+import { conditionLabel, type Settings } from './CalculationControls';
 import type { QueueProjection } from './useQueue';
 
 type RecordStatus = 'queued' | 'running' | 'cancelling' | 'succeeded' | 'cancelled' | 'failed' | 'timed_out' | 'interrupted' | 'corrupt';
-type JobRecord = { sequence: number; id: string; name: string; formula: string; status: RecordStatus; createdAt: number; error: string | null; energyHartree: number | null; retryOf: string | null; legacy: boolean };
+type JobRecord = { settings?: Settings; sequence: number; id: string; name: string; formula: string; status: RecordStatus; createdAt: number; error: string | null; energyHartree: number | null; retryOf: string | null; legacy: boolean };
 type JobPage = { items: JobRecord[]; nextCursor: number | null };
 const restoreIcon = 'M4 10a8 8 0 1 1 0 5M4 4v6h6';
 const stopIcon = 'M5 5h14v14H5Z';
@@ -54,7 +55,7 @@ export function JobHistory({ locale, busy, queueState, onAction }: { locale: Loc
     </div>
     {!queue.items.length ? <p className="history-empty">{queueLoading ? t.connecting : t.queueEmpty}</p> : null}
     <ol className="queue-list" aria-label={t.queue} aria-busy={queueLoading}>
-      {queue.items.map(item => <li key={item.id}><div><strong>{item.formula}</strong><span>{item.name || t.untitled}</span><small>{t.queued}</small></div>
+      {queue.items.map(item => <li key={item.id}><div><strong>{item.formula}</strong><span>{item.name || t.untitled}</span><small>{t.queued}{item.settings ? ` · ${conditionLabel(item.settings)}` : ''}</small></div>
         <button type="button" title={t.cancelQueued} aria-label={`${t.cancelQueued}: ${item.name || item.formula}`} disabled={busy || acting} onClick={() => void act('cancel_queued_job', { id: item.id })}><Glyph path={stopIcon} /></button>
       </li>)}
     </ol>
@@ -69,7 +70,7 @@ export function JobHistory({ locale, busy, queueState, onAction }: { locale: Loc
       {page.items.map(job => <li key={job.id}>
         <div className="job-record">
           <div className="job-record-title"><strong>{job.formula}</strong><span>{job.name || t.untitled}</span></div>
-          <div className="job-record-meta"><time dateTime={new Date(job.createdAt).toISOString()}>{new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(job.createdAt)}</time><span className={'job-status ' + job.status}>{t[job.status]}</span></div>
+          {job.settings ? <small>{conditionLabel(job.settings)}</small> : null}<div className="job-record-meta"><time dateTime={new Date(job.createdAt).toISOString()}>{new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(job.createdAt)}</time><span className={'job-status ' + job.status}>{t[job.status]}</span></div>
           {job.energyHartree !== null ? <div className="history-energy">{job.energyHartree.toFixed(10)} <small>Eh</small></div> : null}
           <details><summary>{t.details}</summary><code>{job.id}</code>{job.retryOf ? <p>{t.retryOf}<code>{job.retryOf}</code></p> : null}{job.legacy ? <p>{t.legacyRecord}</p> : null}{job.error ? <p>{errorMessage(job.error, locale)}</p> : null}</details>
         </div>

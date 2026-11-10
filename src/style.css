@@ -267,3 +267,13 @@ main { padding-top: 0; }
 .bond-source-status small { font-size: 11px; }
 .bond-source-status button { font-size: 11px; min-height: 24px; padding: 2px 5px; }
 @media (prefers-color-scheme: dark) { .bond-source-status { color: #a5afbd; } }
+
+.panel-heading h2:focus-visible { outline: 2px solid #3574c4; outline-offset: 3px; border-radius: 2px; }
+.structure-source { margin-top: 12px; font-size: 12px; overflow-wrap: anywhere; }
+.structure-source code { display: block; margin-top: 8px; }
+.xyz-editor .heading label { display: flex; align-items: center; gap: 8px; }
+.calculation-settings { margin: 16px 0; }
+.settings-row { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; }
+.settings-row label { display: grid; gap: 4px; flex: 1 1 120px; min-width: 0; }
+.settings-row select { width: 100%; min-width: 0; font-size: 12px; }
+.calculation-settings details { margin-top: 8px; }

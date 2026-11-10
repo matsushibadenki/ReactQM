@@ -40,11 +40,19 @@ def analyze(request):
         raise ValueError("electrons")
     rows = [str(len(atoms)), "ReactQM valence"] + [f'{Chem.GetPeriodicTable().GetElementSymbol(a["atomic_number"])} ' + ' '.join(format(v, '.17g') for v in a["position_angstrom"]) for a in atoms]
     try:
-        molecule = Chem.MolFromXYZBlock('\n'.join(rows)+'\n')
+        source = document.get("source")
+        if source:
+            from .structure import parse_input
+            molecule = parse_input(source["format"], source["text"])
+            if [a.GetAtomicNum() for a in molecule.GetAtoms()] != [a["atomic_number"] for a in atoms]:
+                raise ValueError("source_atoms")
+        else:
+            molecule = Chem.MolFromXYZBlock('\n'.join(rows)+'\n')
         if molecule is None:
             raise ValueError("xyz")
-        rdDetermineBonds.DetermineBonds(molecule, charge=document["charge"], allowChargedFragments=True,
-                                        embedChiral=False, useVdw=False, maxIterations=1000)
+        if not source:
+            rdDetermineBonds.DetermineBonds(molecule, charge=document["charge"], allowChargedFragments=True,
+                                            embedChiral=False, useVdw=False, maxIterations=1000)
         Chem.SanitizeMol(molecule)
         Chem.Kekulize(molecule, clearAromaticFlags=True)
         molecule.UpdatePropertyCache(strict=True)
@@ -62,8 +70,8 @@ def analyze(request):
 
 def serve():
     try:
-        data = sys.stdin.buffer.read(32769)
-        if len(data) > 32768:
+        data = sys.stdin.buffer.read(65537)
+        if len(data) > 65536:
             raise ValueError("size")
         print(json.dumps(analyze(json.loads(data)), allow_nan=False), flush=True)
         return 0

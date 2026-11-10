@@ -28,6 +28,8 @@ pub struct JobRequest {
     pub basis: String,
     pub max_cycle: u32,
     pub conv_tol: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<crate::settings::CalculationSettings>,
 }
 impl JobRequest {
     pub fn validate(&self) -> Result<(), String> {
@@ -44,14 +46,61 @@ impl JobRequest {
                 .to_string()
                 != self.job_id
             || self.input_hash != self.document.fingerprint()
-            || self.method != "RHF"
-            || self.basis != "sto-3g"
             || !(1..=50).contains(&self.max_cycle)
             || !(1e-12..=1e-6).contains(&self.conv_tol)
         {
             return Err("job_invalid".into());
         }
+        let settings = self.effective_settings();
+        settings.validate()?;
+        if settings.method != self.method
+            || settings.basis != self.basis
+            || settings.max_cycle != self.max_cycle
+            || settings.conv_tol != self.conv_tol
+        {
+            return Err("job_invalid".into());
+        }
+        if self.settings.is_none() && (self.method != "RHF" || self.basis != "sto-3g") {
+            return Err("job_invalid".into());
+        }
         Ok(())
+    }
+    pub fn validate_result(&self, result: &Calculation) -> Result<(), String> {
+        result.validate(&self.document)?;
+        if result.job_id != self.job_id
+            || result.method != self.method
+            || result.basis != self.basis
+            || result.settings != self.settings
+        {
+            return Err("result_invalid".into());
+        }
+        Ok(())
+    }
+    pub fn effective_settings(&self) -> crate::settings::CalculationSettings {
+        self.settings
+            .clone()
+            .unwrap_or_else(|| crate::settings::CalculationSettings {
+                method: self.method.clone(),
+                basis: self.basis.clone(),
+                max_cycle: self.max_cycle,
+                conv_tol: self.conv_tol,
+                ..Default::default()
+            })
+    }
+    pub fn with_settings(
+        document: Document,
+        revision: u64,
+        settings: crate::settings::CalculationSettings,
+    ) -> Result<Self, String> {
+        settings.validate()?;
+        let mut request = Self::new(document, revision)?;
+        request.method = settings.method.clone();
+        request.basis = settings.basis.clone();
+        request.max_cycle = settings.max_cycle;
+        request.conv_tol = settings.conv_tol;
+        request.settings = Some(settings);
+        request.validate()?;
+        Ok(request)
     }
     pub fn retry(&self, revision: u64) -> Result<Self, String> {
         self.validate()?;
@@ -79,6 +128,7 @@ impl JobRequest {
             basis: "sto-3g".into(),
             max_cycle: 50,
             conv_tol: 1e-9,
+            settings: None,
         })
     }
 }
@@ -225,7 +275,7 @@ pub fn execute(
                         schema_version: 1,
                         calculation,
                     } if calculation.job_id == request.job_id && result.is_none() => {
-                        calculation.validate(&request.document)?;
+                        request.validate_result(&calculation)?;
                         result = Some(calculation);
                     }
                     WorkerEvent::Error {

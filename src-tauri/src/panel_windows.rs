@@ -23,6 +23,12 @@ pub struct LayoutView {
     pub layout: PanelLayout,
     pub error: Option<String>,
 }
+#[derive(Clone, Serialize)]
+struct PanelFocus {
+    panel: Panel,
+    revision: u64,
+}
+
 fn view(app: &tauri::AppHandle) -> Result<LayoutView, String> {
     Ok(LayoutView {
         layout: app
@@ -69,7 +75,7 @@ fn create(app: &tauri::AppHandle, panel: Panel) -> Result<tauri::WebviewWindow, 
     if let Some(window) = app.get_webview_window(panel.label()) {
         return Ok(window);
     }
-    tauri::WebviewWindowBuilder::new(
+    let window = tauri::WebviewWindowBuilder::new(
         app,
         panel.label(),
         tauri::WebviewUrl::App("index.html".into()),
@@ -81,7 +87,12 @@ fn create(app: &tauri::AppHandle, panel: Panel) -> Result<tauri::WebviewWindow, 
     .visible(false)
     .disable_drag_drop_handler()
     .build()
-    .map_err(|e| format!("panel_window: {e}"))
+    .map_err(|e| format!("panel_window: {e}"))?;
+    if let Err(error) = crate::window_geometry::restore(&window, panel) {
+        let _ = window.destroy();
+        return Err(error);
+    }
+    Ok(window)
 }
 #[tauri::command]
 pub fn layout_snapshot(app: tauri::AppHandle) -> Result<LayoutView, String> {
@@ -119,8 +130,9 @@ async fn change(
         return Err("stale_layout".into());
     }
     let focus = match &action {
-        Some(Action::Activate { panel }) if old.zone(*panel) == Zone::Floating => Some(*panel),
-        _ => None,
+        Some(Action::Activate { panel } | Action::Move { panel, .. }) => Some(*panel),
+        Some(Action::Reset) => Some(Panel::Result),
+        _ => redock,
     };
     let reset = matches!(action, Some(Action::Reset));
     if service.error.lock().unwrap().is_some() && !reset {
@@ -148,6 +160,16 @@ async fn change(
                 }
             }
         }
+    }
+    if reset {
+        crate::window_geometry::reset(app)?;
+    } else {
+        for panel in Panel::ALL {
+            if old.zone(panel) == Zone::Floating && next.zone(panel) != Zone::Floating {
+                crate::window_geometry::capture(app, panel);
+            }
+        }
+        crate::window_geometry::flush(app);
     }
     if let Err(error) = next.save(&path) {
         for window in created {
@@ -177,9 +199,28 @@ async fn change(
         let _ = window.set_focus();
     }
     if let Some(panel) = focus {
-        if let Some(window) = app.get_webview_window(panel.label()) {
+        let label = if next.zone(panel) == Zone::Floating {
+            panel.label()
+        } else {
+            "main"
+        };
+        if let Some(window) = app.get_webview_window(label) {
+            window
+                .unminimize()
+                .map_err(|e| format!("panel_window: {e}"))?;
+            if next.zone(panel) == Zone::Floating {
+                crate::window_geometry::recover(&window)?;
+            }
             let _ = window.show();
             let _ = window.set_focus();
+            let _ = app.emit_to(
+                label,
+                "panel-focus",
+                PanelFocus {
+                    panel,
+                    revision: next.revision,
+                },
+            );
         }
     }
     Ok(snapshot)
@@ -197,6 +238,9 @@ pub fn setup(app: &tauri::AppHandle) {
     match result {
         Ok(layout) => app.state::<AppState>().0.lock().unwrap().layout = layout,
         Err(error) => *app.state::<LayoutService>().error.lock().unwrap() = Some(error),
+    }
+    if let Err(error) = crate::window_geometry::setup(app) {
+        *app.state::<LayoutService>().error.lock().unwrap() = Some(error);
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -230,6 +274,8 @@ pub fn close_requested(app: &tauri::AppHandle, panel: Panel, api: &tauri::CloseR
         return;
     }
     api.prevent_close();
+    crate::window_geometry::capture(app, panel);
+    crate::window_geometry::flush(app);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = change(&app, None, None, Some(panel)).await {

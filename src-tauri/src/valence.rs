@@ -153,16 +153,28 @@ pub fn analyze(
     timeout: Duration,
 ) -> Result<Analysis, String> {
     document.validate()?;
+    let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":1,"input_hash":document.fingerprint(),"document":document})).map_err(|_|"valence_protocol")?;
+    let bytes = worker_response(config, stopping, timeout, "valence", bytes)?;
+    let result: Analysis = serde_json::from_slice(&bytes).map_err(|_| "valence_protocol")?;
+    result.validate(document)?;
+    Ok(result)
+}
+pub(crate) fn worker_response(
+    config: &WorkerConfig,
+    stopping: &AtomicBool,
+    timeout: Duration,
+    operation: &str,
+    bytes: Vec<u8>,
+) -> Result<Vec<u8>, String> {
     if !config.python.is_file() {
         return Err("worker_missing".into());
     }
-    let bytes=serde_json::to_vec(&serde_json::json!({"schema_version":1,"input_hash":document.fingerprint(),"document":document})).map_err(|_|"valence_protocol")?;
-    if bytes.len() > 32768 {
+    if bytes.len() > 65536 {
         return Err("valence_protocol".into());
     }
     let mut command = Command::new(&config.python);
     command
-        .args(["-m", "reactqm_worker", "valence"])
+        .args(["-m", "reactqm_worker", operation])
         .current_dir(&config.root)
         .env("PYTHONPATH", config.root.join("src"))
         .env("OMP_NUM_THREADS", "1")
@@ -217,9 +229,7 @@ pub fn analyze(
     if bytes.len() > 65536 {
         return Err("valence_protocol".into());
     }
-    let result: Analysis = serde_json::from_slice(&bytes).map_err(|_| "valence_protocol")?;
-    result.validate(document)?;
-    Ok(result)
+    Ok(bytes)
 }
 async fn perceive(
     app: tauri::AppHandle,

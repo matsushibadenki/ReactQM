@@ -75,8 +75,19 @@ pub struct WorkspaceSnapshot {
     pub calculation: Option<Calculation>,
     pub job: Option<JobSnapshot>,
     pub busy: bool,
+    pub structure_source: Option<StructureSummary>,
+    pub settings: crate::settings::CalculationSettings,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructureSummary {
+    pub format: String,
+    pub method: String,
+    pub seed: Option<u32>,
+    pub engine_version: String,
+    pub input_hash: String,
+}
 impl Workspace {
     pub fn replace_project(&mut self, project: Project) -> Result<(), String> {
         if project == self.project {
@@ -141,6 +152,16 @@ impl Workspace {
             revision: self.revision,
             document_revision: self.document_revision,
             locale: self.locale,
+            settings: self.project.settings.clone(),
+            structure_source: doc
+                .and_then(|d| d.source.as_ref())
+                .map(|s| StructureSummary {
+                    format: s.format.clone(),
+                    method: s.method.clone(),
+                    seed: s.seed,
+                    engine_version: s.engine_version.clone(),
+                    input_hash: s.input_hash.clone(),
+                }),
             atom_count: doc.map_or(0, |doc| doc.atoms.len()),
             name: doc.map_or_else(String::new, |doc| doc.name.clone()),
             formula: doc.map_or_else(String::new, |doc| doc.formula()),
@@ -165,6 +186,7 @@ mod tests {
     use crate::document::Document;
     fn project(distance: f64) -> Project {
         Project {
+            settings: Default::default(),
             document: Some(
                 Document::from_xyz(&format!("2\nH2\nH 0 0 0\nH 0 0 {distance}"), 0, 0).unwrap(),
             ),
@@ -206,6 +228,7 @@ mod tests {
         let document = state.project.document.clone().unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         let calculation = Calculation {
+            settings: None,
             job_id: id.clone(),
             input_hash: document.fingerprint(),
             method: "RHF".into(),

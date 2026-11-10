@@ -16,6 +16,45 @@ pub struct Document {
     pub atoms: Vec<Atom>,
     pub charge: i32,
     pub spin: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<StructureSource>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StructureSource {
+    pub format: String,
+    pub text: String,
+    pub input_hash: String,
+    pub canonical_smiles: String,
+    pub engine_version: String,
+    pub method: String,
+    pub seed: Option<u32>,
+}
+impl StructureSource {
+    pub fn validate(&self) -> Result<(), String> {
+        if !["smiles", "sdf"].contains(&self.format.as_str())
+            || self.text.trim().is_empty()
+            || self.text.len() > 16384
+            || self
+                .text
+                .chars()
+                .any(|c| c.is_control() && !['\n', '\r', '\t'].contains(&c))
+            || self.input_hash != format!("{:x}", Sha256::digest(self.text.as_bytes()))
+            || self.canonical_smiles.is_empty()
+            || self.canonical_smiles.len() > 4096
+            || self.engine_version.is_empty()
+            || self.engine_version.len() > 64
+            || !match self.method.as_str() {
+                "etkdgv3" => self.seed.is_some_and(|s| s <= i32::MAX as u32),
+                "sdf_3d" => self.format == "sdf" && self.seed.is_none(),
+                _ => false,
+            }
+        {
+            return Err("structure_protocol".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -81,12 +120,16 @@ impl Document {
             atoms,
             charge,
             spin,
+            source: None,
         };
         document.validate()?;
         Ok(document)
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(source) = &self.source {
+            source.validate()?;
+        }
         if self.charge.unsigned_abs() > 64 {
             return Err("electron_spin".into());
         }

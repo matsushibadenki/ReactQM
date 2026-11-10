@@ -43,6 +43,7 @@ pub struct JobRecord {
     pub energy_hartree: Option<f64>,
     pub retry_of: Option<String>,
     pub legacy: bool,
+    pub settings: Option<crate::settings::CalculationSettings>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +54,7 @@ pub struct JobPage {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueItem {
+    pub settings: Option<crate::settings::CalculationSettings>,
     pub sequence: i64,
     pub id: String,
     pub name: String,
@@ -75,7 +77,7 @@ pub enum Claim {
         error: String,
     },
     Ready {
-        request: JobRequest,
+        request: Box<JobRequest>,
         directory: PathBuf,
     },
 }
@@ -148,6 +150,14 @@ fn digest(path: &Path) -> Result<(u64, String), String> {
         return Err("artifact_invalid".into());
     }
     Ok((bytes, format!("{:x}", hash.finalize())))
+}
+fn saved_settings(json: &str) -> Option<crate::settings::CalculationSettings> {
+    if json.len() > 65536 {
+        return None;
+    }
+    let request: JobRequest = serde_json::from_str(json).ok()?;
+    request.validate().ok()?;
+    Some(request.effective_settings())
 }
 impl Catalog {
     pub fn open(root: &Path) -> Result<Self, String> {
@@ -274,11 +284,12 @@ impl Catalog {
                 name: row.get(2)?,
                 formula: row.get(3)?,
                 status: row.get(4)?,
+                settings: saved_settings(&row.get::<_, String>(5)?),
             })
         };
-        let active=transaction.query_row("SELECT sequence,id,name,formula,status FROM jobs WHERE status IN ('running','cancelling') ORDER BY sequence LIMIT 1",[],map).optional().map_err(storage)?;
+        let active=transaction.query_row("SELECT sequence,id,name,formula,status,request_json FROM jobs WHERE status IN ('running','cancelling') ORDER BY sequence LIMIT 1",[],map).optional().map_err(storage)?;
         let mut items = {
-            let mut statement=transaction.prepare("SELECT sequence,id,name,formula,status FROM jobs WHERE status='queued' AND (?1 IS NULL OR sequence>?1) ORDER BY sequence LIMIT ?2").map_err(storage)?;
+            let mut statement=transaction.prepare("SELECT sequence,id,name,formula,status,request_json FROM jobs WHERE status='queued' AND (?1 IS NULL OR sequence>?1) ORDER BY sequence LIMIT ?2").map_err(storage)?;
             let rows = statement
                 .query_map(params![after, (PAGE_SIZE + 1) as i64], map)
                 .map_err(storage)?
@@ -345,7 +356,10 @@ impl Catalog {
                         [&id],
                     )
                     .map_err(storage)?;
-                Claim::Ready { request, directory }
+                Claim::Ready {
+                    request: Box::new(request),
+                    directory,
+                }
             }
             Err(error) => {
                 transaction
@@ -387,7 +401,7 @@ impl Catalog {
     }
     pub fn page(&self, before: Option<i64>) -> Result<JobPage, String> {
         let connection = self.connection.lock().map_err(storage)?;
-        let mut statement=connection.prepare("SELECT sequence,id,name,formula,status,created_at,error,energy_hartree,retry_of,legacy FROM jobs WHERE (?1 IS NULL OR sequence < ?1) ORDER BY sequence DESC LIMIT ?2").map_err(storage)?;
+        let mut statement=connection.prepare("SELECT sequence,id,name,formula,status,created_at,error,energy_hartree,retry_of,legacy,request_json FROM jobs WHERE (?1 IS NULL OR sequence < ?1) ORDER BY sequence DESC LIMIT ?2").map_err(storage)?;
         let mut items = statement
             .query_map(params![before, (PAGE_SIZE + 1) as i64], |row| {
                 Ok(JobRecord {
@@ -401,6 +415,7 @@ impl Catalog {
                     energy_hartree: row.get(7)?,
                     retry_of: row.get(8)?,
                     legacy: row.get(9)?,
+                    settings: saved_settings(&row.get::<_, String>(10)?),
                 })
             })
             .map_err(storage)?
@@ -455,7 +470,7 @@ impl Catalog {
             return Err("artifact_invalid".into());
         }
         let result: Calculation = read_json(&directory.join("result.json"))?;
-        result.validate(&request.document)?;
+        request.validate_result(&result)?;
         if &result != calculation || result.job_id != request.job_id {
             return Err("artifact_invalid".into());
         }
@@ -523,7 +538,7 @@ impl Catalog {
             return Err("artifact_invalid".into());
         }
         let result: Calculation = read_json(&directory.join("result.json"))?;
-        result.validate(&request.document)?;
+        request.validate_result(&result)?;
         if result.job_id != request.job_id {
             return Err("artifact_invalid".into());
         }
@@ -619,6 +634,7 @@ impl Catalog {
         );
         match result {
             Ok(calculation) => Ok(Project {
+                settings: request.effective_settings(),
                 document: Some(request.document),
                 calculation: Some(calculation),
             }),
@@ -784,6 +800,7 @@ mod tests {
     // Storage fixtures only. The separate catalog_probe uses real PySCF/HDF5 artifacts.
     fn outputs(root: &Path, request: &JobRequest) -> Calculation {
         let result = Calculation {
+            settings: None,
             job_id: request.job_id.clone(),
             input_hash: request.input_hash.clone(),
             method: request.method.clone(),
@@ -813,6 +830,7 @@ mod tests {
         assert_eq!(
             store.restore(&input.job_id).unwrap(),
             Project {
+                settings: input.effective_settings(),
                 document: Some(input.document.clone()),
                 calculation: Some(calculation)
             }

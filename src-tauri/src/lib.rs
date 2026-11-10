@@ -6,8 +6,11 @@ pub mod panel_windows;
 pub mod project;
 pub mod renderer;
 pub mod scheduler;
+pub mod settings;
 pub mod state;
+pub mod structure;
 pub mod valence;
+pub mod window_geometry;
 
 use catalog::{Catalog, CatalogState, JobPage, QueuePage};
 use document::Document;
@@ -75,7 +78,9 @@ fn import_xyz(
     let snapshot = {
         let mut workspace = state.0.lock().map_err(|e| e.to_string())?;
         check_revision(&workspace, expected_revision)?;
+        let settings = workspace.project.settings.clone();
         workspace.replace_project(Project {
+            settings,
             document: Some(document),
             calculation: None,
         })?;
@@ -155,6 +160,24 @@ fn cancel_job(
     publish(&app, snapshot)
 }
 #[tauri::command]
+fn set_calculation_settings(
+    app: tauri::AppHandle,
+    expected_revision: u64,
+    settings: settings::CalculationSettings,
+) -> Result<WorkspaceSnapshot, String> {
+    settings.validate()?;
+    let snapshot = {
+        let state = app.state::<AppState>();
+        let mut workspace = state.0.lock().map_err(|e| e.to_string())?;
+        check_revision(&workspace, expected_revision)?;
+        let mut project = workspace.project.clone();
+        project.settings = settings;
+        workspace.replace_project(project)?;
+        workspace.snapshot()
+    };
+    publish(&app, snapshot)
+}
+#[tauri::command]
 fn start_calculation(
     app: tauri::AppHandle,
     expected_revision: u64,
@@ -183,9 +206,10 @@ fn launch_calculation(
             )
         } else {
             (
-                JobRequest::new(
+                JobRequest::with_settings(
                     workspace.project.document.clone().ok_or("no_document")?,
                     workspace.document_revision,
+                    workspace.project.settings.clone(),
                 )?,
                 None,
             )
@@ -350,6 +374,13 @@ fn detach_viewport(window: tauri::WebviewWindow, client: String) -> Result<(), S
 }
 
 fn stop_execution(app: &tauri::AppHandle, request_exit: bool) -> bool {
+    for panel in layout::Panel::ALL {
+        window_geometry::capture(app, panel);
+    }
+    window_geometry::flush(app);
+    app.state::<structure::StructureService>()
+        .stopping
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     app.state::<valence::ValenceService>()
         .stopping
         .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -377,12 +408,19 @@ fn stop_execution(app: &tauri::AppHandle, request_exit: bool) -> bool {
     false
 }
 
+/// Shared native context avoids embedding the macOS plist twice in native probes.
+pub fn native_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
         .manage(valence::ValenceService::default())
+        .manage(structure::StructureService::default())
         .manage(Scheduler::default())
         .manage(panel_windows::LayoutService::default())
+        .manage(window_geometry::GeometryService::default())
         .setup(|app| {
             let catalog = storage_directory(app.handle()).and_then(|root| Catalog::open(&root));
             app.manage(CatalogState(catalog));
@@ -404,6 +442,7 @@ pub fn run() {
             panel_windows::update_layout,
             set_locale,
             import_xyz,
+            structure::import_structure,
             history_step,
             save_project,
             load_project,
@@ -414,11 +453,24 @@ pub fn run() {
             restore_job,
             retry_job,
             start_calculation,
+            set_calculation_settings,
             cancel_job
         ])
-        .build(tauri::generate_context!())
+        .build(native_context())
         .expect("ReactQM failed to start")
         .run(|app, event| {
+            if let tauri::RunEvent::WindowEvent { label, event, .. } = &event {
+                if matches!(
+                    event,
+                    tauri::WindowEvent::Moved(_)
+                        | tauri::WindowEvent::Resized(_)
+                        | tauri::WindowEvent::ScaleFactorChanged { .. }
+                ) {
+                    if let Some(panel) = layout::Panel::from_label(label) {
+                        window_geometry::capture(app, panel);
+                    }
+                }
+            }
             if let tauri::RunEvent::WindowEvent {
                 label,
                 event: tauri::WindowEvent::CloseRequested { api, .. },
@@ -445,6 +497,7 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 stop_execution(app, false);
                 valence::shutdown(app);
+                structure::shutdown(app);
                 app.state::<Scheduler>().join();
             }
             if let tauri::RunEvent::ExitRequested { api, .. } = event {

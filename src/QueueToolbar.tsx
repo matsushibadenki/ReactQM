@@ -1,3 +1,4 @@
+import { conditionLabel } from './CalculationControls';
 import { messages, type Locale } from './i18n';
 import type { QueueProjection } from './useQueue';
 const paths = { play: 'm8 4 12 8-12 8Z', pause: 'M8 4v16M16 4v16', stop: 'M5 5h14v14H5Z' };
@@ -10,7 +11,7 @@ export function QueueToolbar({ locale, state, job, disabled, onAction }: { local
   return <div className="queue-toolbar" role="toolbar" aria-label={t.queue}>
     <button type="button" title={queue.paused ? t.resumeQueue : t.pauseQueue} aria-label={queue.paused ? t.resumeQueue : t.pauseQueue} disabled={disabled || state.loading} onClick={() => void action('set_queue_paused', { paused: !queue.paused })}><Glyph name={queue.paused ? 'play' : 'pause'} /></button>
     <span className="queue-overview">{t.queue} <strong>{queue.waiting}</strong><span>{queue.paused ? t.queuePaused : t.queueEnabled}</span></span>
-    <div className="active-job-summary" role="status">{queue.active ? <><strong>{queue.active.formula}</strong><span title={queue.active.name}>{queue.active.name || t.untitled}</span><small>{cancelling ? t.cancelling : t.running} · {t.cycle} {job?.id === queue.active.id ? job.cycle : 0}</small></> : null}</div>
+    <div className="active-job-summary" role="status">{queue.active ? <><strong title={queue.active.settings ? conditionLabel(queue.active.settings) : undefined}>{queue.active.formula}</strong><span title={queue.active.name}>{queue.active.name || t.untitled}</span><small>{cancelling ? t.cancelling : t.running} · {t.cycle} {job?.id === queue.active.id ? job.cycle : 0}</small></> : null}</div>
     {queue.active ? <button type="button" title={t.cancel} aria-label={`${t.cancel}: ${queue.active.name || queue.active.formula}`} disabled={disabled || cancelling} onClick={() => void action('cancel_job', { id: queue.active!.id })}><Glyph name="stop" /></button> : null}
   </div>;
 }

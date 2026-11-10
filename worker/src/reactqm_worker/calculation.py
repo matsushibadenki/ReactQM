@@ -10,7 +10,7 @@ import uuid
 
 
 def validate_request(request: dict) -> None:
-    if request.get("schema_version") != 1 or request.get("method") != "RHF" or request.get("basis") != "sto-3g":
+    if request.get("schema_version") != 1:
         raise ValueError("Unsupported job schema or method")
     uuid.UUID(request["job_id"])
     fingerprint = request["input_hash"]
@@ -20,6 +20,25 @@ def validate_request(request: dict) -> None:
         raise ValueError("Invalid cycle limit")
     if not isinstance(request["conv_tol"], (int, float)) or not 1e-12 <= request["conv_tol"] <= 1e-6:
         raise ValueError("Invalid convergence threshold")
+    settings = request.get("settings")
+    if settings is None:
+        if request["method"] != "RHF" or request["basis"] != "sto-3g":
+            raise ValueError("Legacy settings")
+    else:
+        if set(settings) != {"method", "basis", "xc", "grid_level", "max_cycle", "conv_tol"}:
+            raise ValueError("Settings schema")
+        if any(settings[k] != request[k] for k in ["method", "basis", "max_cycle", "conv_tol"]):
+            raise ValueError("Mismatched settings")
+        if settings["basis"] not in ["sto-3g", "6-31g", "def2-svp"]:
+            raise ValueError("Basis")
+        if settings["method"] == "RHF":
+            if settings["xc"] is not None or settings["grid_level"] is not None:
+                raise ValueError("HF settings")
+        elif settings["method"] == "RKS":
+            if settings["xc"] not in ["PBE", "PBE0", "B3LYP"] or type(settings["grid_level"]) is not int or settings["grid_level"] not in [3,5]:
+                raise ValueError("DFT settings")
+        else:
+            raise ValueError("Method")
     document = request["document"]
     if document["schema_version"] != 1 or document["coordinate_unit"] != "angstrom":
         raise ValueError("Unsupported document schema or unit")
@@ -59,7 +78,7 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
     import h5py
     import numpy as np
     import pyscf
-    from pyscf import gto, scf
+    from pyscf import gto, scf, dft
 
     started = time.monotonic()
     document = request["document"]
@@ -67,7 +86,11 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
     molecule = gto.M(atom=[(atom["atomic_number"], atom["position_angstrom"]) for atom in document["atoms"]],
                      unit="Angstrom", basis=request["basis"], charge=document["charge"], spin=0,
                      verbose=0, max_memory=512)
-    solver = scf.RHF(molecule)
+    settings = request.get("settings")
+    solver = scf.RHF(molecule) if request["method"] == "RHF" else dft.RKS(molecule)
+    if request["method"] == "RKS":
+        solver.xc = settings["xc"]
+        solver.grids.level = settings["grid_level"]
     solver.max_cycle = request["max_cycle"]
     solver.conv_tol = request["conv_tol"]
     solver.chkfile = str(output_dir / "scf.chk")
@@ -88,6 +111,12 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
         artifact.attrs["method"] = request["method"]
         artifact.attrs["basis"] = request["basis"]
         artifact.attrs["pyscf_version"] = pyscf.__version__
+        artifact.attrs["max_cycle"] = request["max_cycle"]
+        artifact.attrs["conv_tol"] = request["conv_tol"]
+        if settings is not None:
+            artifact.attrs["settings_json"] = json.dumps(settings, sort_keys=True)
+        if request["method"] == "RKS":
+            artifact.attrs["libxc_version"] = dft.libxc.__version__
         artifact.create_dataset("energy", data=energy).attrs["unit"] = "hartree"
         artifact.create_dataset("gradient", data=gradients).attrs["unit"] = "hartree/bohr"
         artifact.create_dataset("coordinates", data=molecule.atom_coords(unit="Angstrom")).attrs["unit"] = "angstrom"
@@ -97,6 +126,8 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
     result = {"job_id": request["job_id"], "input_hash": request["input_hash"], "method": request["method"],
               "basis": request["basis"], "energy_hartree": energy, "converged": True,
               "engine_version": pyscf.__version__, "elapsed_seconds": time.monotonic() - started}
+    if settings is not None:
+        result["settings"] = settings
     atomic_json(output_dir / "result.json", result)
     return result
 
@@ -107,8 +138,8 @@ def serve(output_dir: Path) -> int:
         print(json.dumps(event, allow_nan=False), file=protocol_stdout, flush=True)
     request = {}
     try:
-        line = sys.stdin.buffer.readline(32769)
-        if len(line) > 32768:
+        line = sys.stdin.buffer.readline(65537)
+        if len(line) > 65536:
             raise ValueError("Request too large")
         request = json.loads(line)
         # Engine/library chatter must not corrupt the control stream.

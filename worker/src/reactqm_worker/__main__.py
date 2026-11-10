@@ -60,9 +60,12 @@ def smoke() -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ReactQM worker diagnostics")
-    parser.add_argument("command", choices=["doctor", "smoke", "calculate", "valence"])
+    parser.add_argument("command", choices=["doctor", "smoke", "calculate", "valence", "structure"])
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
+    if args.command == "structure":
+        from .structure import serve
+        raise SystemExit(serve())
     if args.command == "valence":
         from .valence import serve
         raise SystemExit(serve())

@@ -1,4 +1,4 @@
-use crate::document::Document;
+use crate::{document::Document, settings::CalculationSettings};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
@@ -17,6 +17,8 @@ pub struct Calculation {
     pub converged: bool,
     pub engine_version: String,
     pub elapsed_seconds: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<CalculationSettings>,
 }
 
 impl Calculation {
@@ -27,11 +29,17 @@ impl Calculation {
             || !self.energy_hartree.is_finite()
             || !self.elapsed_seconds.is_finite()
             || self.elapsed_seconds < 0.0
-            || self.method != "RHF"
-            || self.basis != "sto-3g"
             || self.engine_version.len() > 64
             || document.spin != 0
         {
+            return Err("result_invalid".into());
+        }
+        if let Some(settings) = &self.settings {
+            settings.validate().map_err(|_| "result_invalid")?;
+            if settings.method != self.method || settings.basis != self.basis {
+                return Err("result_invalid".into());
+            }
+        } else if self.method != "RHF" || self.basis != "sto-3g" {
             return Err("result_invalid".into());
         }
         Ok(())
@@ -43,6 +51,8 @@ impl Calculation {
 pub struct Project {
     pub document: Option<Document>,
     pub calculation: Option<Calculation>,
+    #[serde(default, skip_serializing_if = "CalculationSettings::is_default")]
+    pub settings: CalculationSettings,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -54,6 +64,7 @@ struct SavedProject {
 
 impl Project {
     pub fn validate(&self) -> Result<(), String> {
+        self.settings.validate()?;
         let doc = self.document.as_ref().ok_or("no_document")?;
         doc.validate()?;
         if let Some(result) = &self.calculation {
@@ -66,7 +77,7 @@ impl Project {
         atomic_json(
             path,
             &SavedProject {
-                schema_version: 1,
+                schema_version: 2,
                 project: self.clone(),
             },
         )
@@ -83,7 +94,7 @@ impl Project {
         }
         let saved: SavedProject =
             serde_json::from_slice(&bytes).map_err(|e| format!("project_invalid: {e}"))?;
-        if saved.schema_version != 1 {
+        if ![1, 2].contains(&saved.schema_version) {
             return Err("document_version".into());
         }
         saved.project.validate()?;
@@ -120,6 +131,7 @@ mod tests {
     fn results_cannot_attach_to_other_inputs_or_nonconverged_states() {
         let doc = Document::from_xyz("2\nH2\nH 0 0 0\nH 0 0 .74", 0, 0).unwrap();
         let mut result = Calculation {
+            settings: None,
             job_id: uuid::Uuid::new_v4().to_string(),
             input_hash: doc.fingerprint(),
             method: "RHF".into(),
@@ -144,6 +156,7 @@ mod tests {
         let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         let path = dir.join("workspace.json");
         let project = Project {
+            settings: Default::default(),
             document: Some(Document::from_xyz("2\nH2\nH 0 0 0\nH 0 0 .74", 0, 0).unwrap()),
             calculation: None,
         };

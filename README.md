@@ -2,7 +2,7 @@
 
 Tauri 2 / Rustを中核に、React UI、Rust / wgpu描画、独立Python Workerを組み合わせる量子化学アプリです。
 
-現在は **XYZ入力 → wgpuの分子3D表示 → RHF/STO-3Gの実計算 → 結果表示 → 保存／再読込** がmacOSで動作します。計算履歴はSQLiteへ自動記録し、再起動後も検証して復元できます。永続待機キューで複数の計算を順に実行できます。結果・履歴パネルはドック／独立表示と配置保存に対応しました。構造編集と独立窓の位置・サイズ復元は次の段階です。
+現在は **XYZ入力 → wgpuの分子3D表示 → 閉殻HF／DFTの実計算 → 結果表示 → 保存／再読込** がmacOSで動作します。計算履歴はSQLiteへ自動記録し、再起動後も検証して復元できます。永続待機キューで複数の計算を順に実行できます。結果・履歴パネルはドック／独立表示と配置保存に対応しました。独立窓の位置・サイズ復元と画面外回収を実装済みです。SDF／SMILES入力と初期3D構造生成に対応しています。構造編集は次の段階です。
 
 ![ReactQMのmacOS実画面：H₂の3D表示とRHF/STO-3Gの収束結果](docs/images/reactqm-macos-h2.jpg)
 
@@ -35,11 +35,28 @@ Python依存は `worker/.venv` に分離します。別の仮想環境が有効�
 
 UIのみ確認する場合は `npm run dev` を実行し、`http://127.0.0.1:1420/` を開きます。ブラウザでは計算・取り込み・保存を無効にし、模擬結果は表示しません。
 
+## SDF／SMILESから分子を取り込む
+
+「分子を取り込む」でSMILES／SDF・MOL／XYZを選び、入力して適用します。ファイルアイコンから `.sdf` / `.mol` / `.smi` / `.smiles` / `.xyz` も開けます。SMILESは `O`（水）、`CCO`（エタノール）、`c1ccccc1`（ベンゼン）などの単一文字列です。名前付き・複数行のSMILESは受け付けません。
+
+- 単一の連結分子、入力16 KiBまで、水素を含め64原子まで。閉殻系のH/B/C/N/O/F/Si/P/S/Cl/Br/Iが対象。ラジカル・同位体・分離断片・複数SDFレコードは拒否します。
+- SMILESと2D SDFは明示水素を追加し、ETKDGv3・固定seed（初期値42、0〜2147483647）・1スレッドで初期3D座標を作成します。3D SDFは既存原子の座標を保持し、必要な水素の座標を追加します。この場合seedは使いません。
+- 電荷は入力構造から取得し、スピン2Sは0です。XYZだけは従来どおり電荷・スピンを指定します。量子計算はH〜Neの閉殻RHF／RKSに対応します。
+- 「生成した初期構造」／「取り込んだ3D座標」を開くと、RDKit版・生成方法・seed・元入力のSHA-256を確認できます。元入力・正準SMILESを含む生成記録は保存、Undo／Redo、待機列、計算履歴、再計算入力にも保持します。
+- これは量子化学的な構造最適化や最低エネルギー配座の探索ではありません。未指定の立体化学を一意に確定しません。同じ入力・seed・RDKit版と同じ実行環境で再生成を検証しており、環境をまたぐ完全一致は保証しません。
+- Rustが20秒の実行上限と子プロセス回収を管理します。失敗時や、他の窓で文書が変更された場合には現在の分子を置き換えません。座標・全結合配列はWorker／Rustに保持し、UIには送信しません。
+
+English: Import one SMILES or SDF/MOL molecule. Seeded, single-threaded ETKDGv3 generates initial coordinates for SMILES/2D SDF; 3D SDF preserves existing coordinates and adds hydrogens. Input provenance survives save, undo and calculation history. These are initial geometries, not quantum-optimized structures. Reproduction requires the same engine environment.
+
+简体中文：可导入单个SMILES或SDF/MOL分子。SMILES／2D SDF使用固定seed、单线程ETKDGv3生成初始坐标；3D SDF保留已有坐标并添加氢。输入记录随保存、撤销及计算历史保留。这不是量子化学优化结构，精确再生成需要相同引擎环境。
+
+統合検証は `npm run test:structure-import`：実SMILES→RDKit→Rust→PySCF→SQLite再起動・復元→プロジェクト保存／再読込の検証。科学的精度の一般的な保証ではなく、実エンジン統合と再現性の検証です。
+
 ## 最初の計算
 
 1. ツールバーの **H₂** または **H₂O** を押すか、「XYZを取り込む」を展開してXYZを入力し「適用」を押します。ファイルアイコンからXYZファイルを選ぶこともできます。
 2. 必要に応じて、取り込み前に電荷・スピン（2S）を設定します。
-3. 上部の「待機列に追加」を押します。「待機列を再開」で投入順に実行します。実行中の分子名・SCF反復数・取消操作も上部に表示します。
+3. 計算パネルの「次の計算」で手法・基底と必要なSCF設定を選び、上部の「待機列に追加」を押します。「待機列を再開」で投入順に実行します。実行中の分子名・SCF反復数・取消操作も上部に表示します。
 4. 収束した場合に全エネルギー（hartree / Eh）とエンジン版・計算時間を表示します。計算記録からjob IDと入力SHA-256を確認できます。
 5. 保存アイコンで現在の分子と結果を保存します。再読込アイコンで保存時点に戻せます。再起動後も同じ保存先から再読込できます。
 
@@ -87,14 +104,19 @@ English: Add immutable inputs to the FIFO queue and resume from the pinned toolb
 
 - 右側の境界をドラッグ、または境界へTabでフォーカスして左右キーで幅を変更します。狭い窓では縦に並べます。
 - 独立窓の閉じるボタンは元のドックへ戻します。メイン窓の上部から独立パネルを再表示できます。
-- パネルの順序・ドック先・タブ選択・表示形式・幅を自動保存し、再起動時に復元します。独立窓の位置とサイズは未保存で、中央・標準サイズで開きます。
+- パネルの順序・ドック先・タブ選択・表示形式・幅を自動保存し、再起動時に復元します。独立窓の位置とサイズも保存し、再起動・再分離時に復元します。接続中の画面の作業領域へ補正するため、取り外した画面の座標にも復帰できます。上部の独立パネル再表示でも最小化を解除し、画面内へ回収します。
 - 全窓が同じRustの文書・計算結果・キューを表示します。独立履歴からの復元もメイン文書とUndoへ反映します。独立表示だけで新しいWorkerは起動しません。
 - 上部の配置リセットで標準配置に戻せます。不正な配置ファイルは初期化せず、エラーとリセット操作を表示します。
 - 分子のMetal描画はメイン窓に保持します。独立窓への分子描画面の移動は後続項目です。
+- パネル名へTabでフォーカスし、Alt+→で右、Alt+↓で下、Alt+↑で独立表示。Alt+Shift+←／→で同じドック内を並べ替えます（MacではAltはOption）。移動後は移動先へフォーカスが戻り、固定ツールバーに隠れないようスクロールを補正します。独立窓の初回表示と再表示では見出しへフォーカスします。
 
-English: Move result/history panels to the side or lower dock, group them as tabs, resize the side dock, or float them in native windows. Close a floating window to redock it. Layout is restored after restart; all windows share the same Rust document. Floating-window coordinates and molecule detachment are still planned.
+English: Focus a panel title. Alt+Right/Down/Up docks right/below or floats; Alt+Shift+Left/Right reorders. On Mac, use Option. Focus follows the panel, including redocking and reopening a minimized window.
 
-简体中文：结果和历史面板可停靠到右侧或底部、合并为标签页、调整侧栏宽度，或在原生独立窗口中显示。关闭独立窗口会返回原停靠区。重启后恢复布局，所有窗口共享同一Rust文档。独立窗口的位置保存和分子视图分离尚未实现。
+简体中文：聚焦面板标题后，Alt+→／↓／↑分别停靠到右侧／底部或浮动，Alt+Shift+←／→调整顺序。Mac使用Option键。移动、重新停靠及重新显示后，焦点会回到目标面板。
+
+English: Move result/history panels to the side or lower dock, group them as tabs, resize the side dock, or float them in native windows. Close a floating window to redock it. Layout is restored after restart; all windows share the same Rust document. Floating-window position and size are restored and clamped to the available monitor work area; showing a panel recovers offscreen windows. Molecule detachment is still planned.
+
+简体中文：结果和历史面板可停靠到右侧或底部、合并为标签页、调整侧栏宽度，或在原生独立窗口中显示。关闭独立窗口会返回原停靠区。重启后恢复布局，所有窗口共享同一Rust文档。独立窗口的位置和大小会恢复并调整到当前屏幕的工作区域，重新显示可找回屏幕外的窗口。分子视图分离尚未实现。
 
 ## 分子の3D表示
 
@@ -134,12 +156,26 @@ English: Selecting an atom automatically estimates its valence (bond-order sum) 
 
 - 基本XYZの単一フレーム、Å単位、1〜64原子、最大16 KiB。
 - 有限座標、原子間距離0.1 Å以上、|座標| ≤ 10,000 Å、|電荷| ≤ 64、電子数とスピンの整合性をRustで検証。
-- 文書としては全元素を識別しますが、**実計算はH〜Ne・スピン2S = 0の閉殻系、RHF/STO-3G** に限定しています。
-- SCFは最大50反復、収束閾値 `1e-9`、タイムアウト120秒。同時実行は1ジョブです。
+- 文書としては全元素を識別しますが、**実計算はH〜Ne・スピン2S = 0の閉殻系** です。RHFまたはRKS（PBE／PBE0／B3LYP）とSTO-3G／6-31G／def2-SVPを選べます。
+- SCFは1〜50反復、エネルギー収束閾値 `1e-12`〜`1e-6` Eh（既定50反復・`1e-9`）、DFTグリッド3／5、タイムアウト120秒。同時実行は1ジョブです。
 - 全エネルギーは核間反発を含み、ZPE・熱補正は含みません。収束は物理的精度や反応予測の正しさを保証する表示ではありません。
 - 未収束・異常終了・不正応答・入力との不一致は結果として採用しません。
 
 H₂サンプルは0.74 Å、電荷0、2S = 0。検証値は約 **−1.1167593074 hartree** です。
+
+## HF／DFTの計算条件
+
+「次の計算」で手法・基底を変更すると、Rustの共有Projectへ反映し、Undo／Redo・保存／再読込にも保持します。変更は以降に投入するジョブへ適用します。表示済みの結果は消さず、その結果の実行条件を別に表示します。待機列・履歴にも条件を表示し、再計算は当時の条件を保持します。
+
+対応はRHF、閉殻RKSのPBE／PBE0／B3LYP、基底はSTO-3G／6-31G／def2-SVPです。開殻系（2S≠0）は拒否します。DFTの分散補正は含みません。SCFの数値収束や高いグリッド設定が物理的精度を保証するものではありません。グリッド依存性の自動評価は後続です。
+
+新規ジョブはmethod・basis・xc・max_cycle・conv_tol・grid_levelを入力／結果に記録し、Rustで完全一致を検査します。HDF5には同じ条件、PySCF版、DFTではLibXC版、エネルギーEh・勾配hartree/bohr・座標Åを保存します。保存Projectはschema v2で次の条件を含み、v1も読み込めます。既存の要求・結果の新フィールドは省略したまま往復するため、既存receiptのhashを作り直しません。
+
+`npm run test:settings` は実PBE／6-31GのH₂を永続キューへ投入し、再起動、実行、receipt検証、条件付き復元、Project v2、再計算条件を確認します。実測は−1.161904411329 Eh。Pythonでは4手法×3基底を同条件の直接PySCF実行と比較しました。macOS実画面でも保存条件読込→実計算→条件付き結果を確認しています。
+
+English: Choose RHF or closed-shell DFT (PBE/PBE0/B3LYP), basis, SCF limits/tolerance and DFT grid for the next job. Queued inputs and historical results retain their original settings; retry reproduces those settings. H–Ne, spin 0 only; no dispersion correction. Project v2 stores settings and reads v1.
+
+简体中文：可为下一任务选择RHF或闭壳层DFT（PBE／PBE0／B3LYP）、基组、SCF上限／阈值及DFT网格。加入队列后条件固定，结果显示实际执行条件，重新计算保留原条件。仅支持H–Ne、自旋0，不含色散校正。Project v2保存条件并兼容读取v1。
 
 ## 保存先と開発用設定
 
@@ -148,7 +184,7 @@ H₂サンプルは0.74 Å、電荷0、2S = 0。検証値は約 **−1.116759307
 - `jobs.sqlite3`、`jobs.sqlite3-wal`、`jobs.sqlite3-shm`：SQLite計算索引とトランザクション用ファイル。
 - `workspace.lock`：作業領域の排他ロック。同じ領域への二重起動時は計算・保存を止めます。
 - `layout.json`：schema v1のパネル配置。文書・原子配列・計算成果物を含みません。
-- `workspace.json`：保存操作をした時点の分子と結果。現在は単一の保存スロットです。
+- `workspace.json`：保存操作をした時点の分子・結果・次回計算条件（schema v2、v1も読込可能）。現在は単一の保存スロットです。
 - `jobs/<UUID>/input.json`：条件・原子配置・単位・入力hash。
 - `jobs/<UUID>/worker.log`：Workerの診断ログ。
 - `jobs/<UUID>/result.h5`：座標・エネルギー・勾配と単位属性。
@@ -169,6 +205,7 @@ npm run test:rust
 npm run test:worker
 npm run test:integration
 npm run test:catalog
+npm run test:settings
 npm run test:queue
 npm run check:worker
 npm run check:gpu
@@ -186,9 +223,11 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D w
 | 確認内容 | 結果 |
 |---|---|
 | Web型検査・本番ビルド、macOS開発用.app | 成功 |
-| Rust unit 34件 + process 2件 | 成功。履歴・復元・破損拒否・取消競合・別プロセス終了・排他・ページ分割・既存検証基準の維持を含む |
-| Python 7件 | 成功 |
+| Rust unit 39件 + process 2件 | 成功。履歴・復元・破損拒否・取消競合・別プロセス終了・排他・ページ分割・既存検証基準の維持を含む |
+| Python 14件 | 成功 |
 | Clippy / all-targets / warnings-as-errors | 成功 |
+| HF／DFT設定 | RHF／PBE／PBE0／B3LYP × 3基底を直接PySCFと比較。DFTグリッド5・不正条件・非収束・条件保存・旧データ互換を確認 |
+| DFTの縦断検証 | PBE／6-31G −1.161904411329 Eh、永続キュー・再起動・receipt・復元・再計算・Project v2・macOS実画面を確認 |
 | Rust→Worker→PySCF→HDF5→保存／再読込 | 成功、H₂ −1.1167593073964257 hartree |
 | Worker異常系 | 異常終了・不正／過大応答・別job ID・未収束・無応答／大量出力のtimeout・取消と子プロセス回収を確認 |
 | Tauri実画面 | H₂実計算、保存／再読込、不正座標拒否、分子変更、Undo／Redo、取消後の操作復帰を確認 |
@@ -250,3 +289,7 @@ src/MoleculeViewport.tsx    表示領域・入力命令・小さな状態の投�
 worker/                    独立Python環境・実計算・診断CLI
 ROADMAP.md                 進捗・完了条件・次の優先順位
 ```
+
+2026-11-10：独立窓の位置・サイズ保存と画面外回収を追加。`npm run test:window-geometry`は一時保存先でネイティブ窓を生成し、保存・再読込・窓再作成・画面外回収・リセットを検証します（デスクトップへのアクセスが必要）。Rust 37 unit＋2 process、`npm run build`成功。単一画面での自動API検証済み。異倍率の複数画面・画面取り外しの実機検証と、ドラッグ等の目視操作確認は保留です。
+
+2026-11-10（パネル操作）：Rust 37 unit＋2 process、build成功。Chromeの操作fixtureでキー操作・実ドラッグ・保存失敗時のフォーカス、日英中×320／375／1100px×明暗を確認。macOSではキーボード移動・独立窓の初期フォーカス・再ドック・閉じる後の復帰・最小化から再表示・固定ヘッダー下の表示補正を確認しました。今回のネイティブ実ポインタドラッグはUI自動化で配置変更を確認できず、追加検証を保留しています。
