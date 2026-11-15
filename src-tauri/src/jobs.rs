@@ -30,15 +30,32 @@ pub struct JobRequest {
     pub conv_tol: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<crate::settings::CalculationSettings>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub optimize: bool,
+}
+fn is_false(value: &bool) -> bool {
+    !value
 }
 impl JobRequest {
     pub fn validate(&self) -> Result<(), String> {
         self.document.validate()?;
-        if self.document.spin != 0 {
-            return Err("rhf_spin".into());
+        if self.optimize && self.document.atoms.len() < 2 {
+            return Err("optimization_atoms".into());
         }
-        if self.document.atoms.iter().any(|a| a.atomic_number > 10) {
-            return Err("rhf_elements".into());
+        let settings = self.effective_settings();
+        settings.validate()?;
+        if settings.method == crate::settings::SCREENING {
+            settings.validate_screening_input(&self.document)?;
+            if self.optimize {
+                return Err("screening_single_point".into());
+            }
+        } else {
+            if self.document.spin != 0 && !settings.is_unrestricted() {
+                return Err("rhf_spin".into());
+            }
+            if self.document.atoms.iter().any(|a| a.atomic_number > 10) {
+                return Err("rhf_elements".into());
+            }
         }
         if self.schema_version != 1
             || uuid::Uuid::parse_str(&self.job_id)
@@ -46,13 +63,9 @@ impl JobRequest {
                 .to_string()
                 != self.job_id
             || self.input_hash != self.document.fingerprint()
-            || !(1..=50).contains(&self.max_cycle)
-            || !(1e-12..=1e-6).contains(&self.conv_tol)
         {
             return Err("job_invalid".into());
         }
-        let settings = self.effective_settings();
-        settings.validate()?;
         if settings.method != self.method
             || settings.basis != self.basis
             || settings.max_cycle != self.max_cycle
@@ -66,8 +79,11 @@ impl JobRequest {
         Ok(())
     }
     pub fn validate_result(&self, result: &Calculation) -> Result<(), String> {
-        result.validate(&self.document)?;
-        if result.job_id != self.job_id
+        let document = self.result_document(result)?;
+        result.validate(&document)?;
+        if result.input_hash != self.input_hash
+            || result.optimization.is_some() != self.optimize
+            || result.job_id != self.job_id
             || result.method != self.method
             || result.basis != self.basis
             || result.settings != self.settings
@@ -75,6 +91,25 @@ impl JobRequest {
             return Err("result_invalid".into());
         }
         Ok(())
+    }
+    pub fn document_at(&self, positions: &[[f64; 3]]) -> Result<Document, String> {
+        if positions.len() != self.document.atoms.len() {
+            return Err("result_invalid".into());
+        }
+        let mut document = self.document.clone();
+        document.source = None;
+        for (atom, position) in document.atoms.iter_mut().zip(positions) {
+            atom.position_angstrom = *position;
+        }
+        document.validate()?;
+        Ok(document)
+    }
+
+    pub fn result_document(&self, result: &Calculation) -> Result<Document, String> {
+        match &result.optimization {
+            Some(output) => self.document_at(&output.positions_angstrom),
+            None => Ok(self.document.clone()),
+        }
     }
     pub fn effective_settings(&self) -> crate::settings::CalculationSettings {
         self.settings
@@ -93,7 +128,7 @@ impl JobRequest {
         settings: crate::settings::CalculationSettings,
     ) -> Result<Self, String> {
         settings.validate()?;
-        let mut request = Self::new(document, revision)?;
+        let mut request = Self::base(document, revision);
         request.method = settings.method.clone();
         request.basis = settings.basis.clone();
         request.max_cycle = settings.max_cycle;
@@ -110,15 +145,12 @@ impl JobRequest {
         Ok(next)
     }
     pub fn new(document: Document, document_revision: u64) -> Result<Self, String> {
-        document.validate()?;
-        if document.spin != 0 {
-            return Err("rhf_spin".into());
-        }
-        // First validated engine scope: H–Ne. Expand only with basis/engine fixtures.
-        if document.atoms.iter().any(|a| a.atomic_number > 10) {
-            return Err("rhf_elements".into());
-        }
-        Ok(Self {
+        let request = Self::base(document, document_revision);
+        request.validate()?;
+        Ok(request)
+    }
+    fn base(document: Document, document_revision: u64) -> Self {
+        Self {
             schema_version: 1,
             job_id: uuid::Uuid::new_v4().to_string(),
             document_revision,
@@ -129,7 +161,8 @@ impl JobRequest {
             max_cycle: 50,
             conv_tol: 1e-9,
             settings: None,
-        })
+            optimize: false,
+        }
     }
 }
 
@@ -143,7 +176,7 @@ enum WorkerEvent {
     },
     Result {
         schema_version: u32,
-        calculation: Calculation,
+        calculation: Box<Calculation>,
     },
     Error {
         schema_version: u32,
@@ -268,7 +301,14 @@ pub fn execute(
                         schema_version: 1,
                         job_id,
                         cycle,
-                    } if job_id == request.job_id && cycle <= request.max_cycle + 1 => {
+                    } if job_id == request.job_id
+                        && cycle
+                            <= if request.optimize {
+                                50
+                            } else {
+                                request.max_cycle + 1
+                            } =>
+                    {
                         progress(cycle)
                     }
                     WorkerEvent::Result {
@@ -276,18 +316,26 @@ pub fn execute(
                         calculation,
                     } if calculation.job_id == request.job_id && result.is_none() => {
                         request.validate_result(&calculation)?;
-                        result = Some(calculation);
+                        result = Some(*calculation);
                     }
                     WorkerEvent::Error {
                         schema_version: 1,
                         job_id,
                         code,
                     } if job_id == request.job_id => {
-                        worker_error = Some(if code == "not_converged" {
-                            code
-                        } else {
-                            "calculation_failed".into()
-                        });
+                        worker_error = Some(
+                            if matches!(
+                                code.as_str(),
+                                "not_converged"
+                                    | "optimization_limit"
+                                    | "screening_missing"
+                                    | "screening_not_converged"
+                            ) {
+                                code
+                            } else {
+                                "calculation_failed".into()
+                            },
+                        );
                     }
                     _ => return Err("worker_protocol".into()),
                 },

@@ -145,7 +145,23 @@ impl Scheduler {
                         Err(error) => ("failed", Some(error), None),
                     };
                     if let Ok(mut workspace) = app.state::<AppState>().0.lock() {
-                        workspace.complete_target(&request.job_id, calculation);
+                        if request.optimize {
+                            let target = workspace.result_targets.remove(&request.job_id);
+                            if target == Some(workspace.document_revision) {
+                                if let Some(calculation) = calculation {
+                                    if let Ok(document) = request.result_document(&calculation) {
+                                        let project = crate::project::Project {
+                                            document: Some(document),
+                                            calculation: Some(calculation),
+                                            settings: request.effective_settings(),
+                                        };
+                                        let _ = workspace.replace_project(project);
+                                    }
+                                }
+                            }
+                        } else {
+                            workspace.complete_target(&request.job_id, calculation);
+                        }
                         if let Some(job) = &mut workspace.job {
                             job.status = status.into();
                             job.error = error;
@@ -182,7 +198,7 @@ pub fn run_claimed(
         directory,
         config,
         cancel.clone(),
-        Duration::from_secs(120),
+        Duration::from_secs(if request.optimize { 600 } else { 120 }),
         progress,
     );
     let result = if cancel.load(Ordering::SeqCst) {

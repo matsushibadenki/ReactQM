@@ -33,6 +33,9 @@ pub struct Catalog {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobRecord {
+    pub optimize: bool,
+    pub multiplicity: Option<u32>,
+    pub resumable: bool,
     pub sequence: i64,
     pub id: String,
     pub name: String,
@@ -54,6 +57,8 @@ pub struct JobPage {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueItem {
+    pub optimize: bool,
+    pub multiplicity: Option<u32>,
     pub settings: Option<crate::settings::CalculationSettings>,
     pub sequence: i64,
     pub id: String,
@@ -119,6 +124,9 @@ fn check_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+    serde_json::from_slice(&read_json_bytes(path)?).map_err(|_| "artifact_invalid".into())
+}
+fn read_json_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path).map_err(storage)?;
     if !metadata.is_file() || metadata.len() > 131072 {
         return Err("artifact_invalid".into());
@@ -127,7 +135,7 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     if bytes.len() > 131072 {
         return Err("artifact_invalid".into());
     }
-    serde_json::from_slice(&bytes).map_err(|_| "artifact_invalid".into())
+    Ok(bytes)
 }
 fn digest(path: &Path) -> Result<(u64, String), String> {
     let metadata = fs::symlink_metadata(path).map_err(storage)?;
@@ -151,13 +159,45 @@ fn digest(path: &Path) -> Result<(u64, String), String> {
     }
     Ok((bytes, format!("{:x}", hash.finalize())))
 }
-fn saved_settings(json: &str) -> Option<crate::settings::CalculationSettings> {
+#[derive(Deserialize)]
+struct OptimizationCheckpoint {
+    identity: CheckpointIdentity,
+    steps: u32,
+    positions_angstrom: Vec<[f64; 3]>,
+    energy_hartree: f64,
+    max_force_ev_per_angstrom: f64,
+}
+
+#[derive(Deserialize)]
+struct CheckpointIdentity {
+    schema_version: u32,
+    job_id: String,
+    input_hash: String,
+    fmax_ev_per_angstrom: f64,
+    input_file_sha256: String,
+}
+
+const CHECKPOINT: &str = "optimization-checkpoint.json";
+fn can_resume(status: &str) -> bool {
+    matches!(status, "cancelled" | "failed" | "timed_out" | "interrupted")
+}
+
+fn is_optimization(json: &str) -> bool {
+    #[derive(Deserialize)]
+    struct Mode {
+        #[serde(default)]
+        optimize: bool,
+    }
+    serde_json::from_str::<Mode>(json).is_ok_and(|mode| mode.optimize)
+}
+
+fn saved_request(json: &str) -> Option<JobRequest> {
     if json.len() > 65536 {
         return None;
     }
     let request: JobRequest = serde_json::from_str(json).ok()?;
     request.validate().ok()?;
-    Some(request.effective_settings())
+    Some(request)
 }
 impl Catalog {
     pub fn open(root: &Path) -> Result<Self, String> {
@@ -278,13 +318,17 @@ impl Catalog {
             )
             .map_err(storage)?;
         let map = |row: &rusqlite::Row<'_>| {
+            let json: String = row.get(5)?;
+            let request = saved_request(&json);
             Ok(QueueItem {
                 sequence: row.get(0)?,
                 id: row.get(1)?,
                 name: row.get(2)?,
                 formula: row.get(3)?,
                 status: row.get(4)?,
-                settings: saved_settings(&row.get::<_, String>(5)?),
+                settings: request.as_ref().map(JobRequest::effective_settings),
+                multiplicity: request.map(|job| job.document.spin + 1),
+                optimize: is_optimization(&json),
             })
         };
         let active=transaction.query_row("SELECT sequence,id,name,formula,status,request_json FROM jobs WHERE status IN ('running','cancelling') ORDER BY sequence LIMIT 1",[],map).optional().map_err(storage)?;
@@ -404,18 +448,31 @@ impl Catalog {
         let mut statement=connection.prepare("SELECT sequence,id,name,formula,status,created_at,error,energy_hartree,retry_of,legacy,request_json FROM jobs WHERE (?1 IS NULL OR sequence < ?1) ORDER BY sequence DESC LIMIT ?2").map_err(storage)?;
         let mut items = statement
             .query_map(params![before, (PAGE_SIZE + 1) as i64], |row| {
+                let id: String = row.get(1)?;
+                let status: String = row.get(4)?;
+                let json: String = row.get(10)?;
+                let request = saved_request(&json);
+                let optimize = is_optimization(&json);
+                let resumable = optimize
+                    && can_resume(&status)
+                    && self
+                        .directory(&id)
+                        .is_ok_and(|dir| dir.join(CHECKPOINT).is_file());
                 Ok(JobRecord {
+                    optimize,
+                    resumable,
                     sequence: row.get(0)?,
-                    id: row.get(1)?,
+                    id,
                     name: row.get(2)?,
                     formula: row.get(3)?,
-                    status: row.get(4)?,
+                    status,
                     created_at: row.get(5)?,
                     error: row.get(6)?,
                     energy_hartree: row.get(7)?,
                     retry_of: row.get(8)?,
                     legacy: row.get(9)?,
-                    settings: saved_settings(&row.get::<_, String>(10)?),
+                    settings: request.as_ref().map(JobRequest::effective_settings),
+                    multiplicity: request.map(|job| job.document.spin + 1),
                 })
             })
             .map_err(storage)?
@@ -457,6 +514,40 @@ impl Catalog {
         }
         Ok(request)
     }
+    pub fn resume_source(&self, id: &str) -> Result<JobRequest, String> {
+        let (mut request, status, _) = self.row(id)?;
+        if !request.optimize || !can_resume(&status) {
+            return Err("optimization_checkpoint".into());
+        }
+        let directory = self.directory(id)?;
+        let input_path = directory.join("input.json");
+        let stored: JobRequest = read_json(&input_path).map_err(|_| "optimization_checkpoint")?;
+        if serde_json::to_vec(&stored).map_err(storage)?
+            != serde_json::to_vec(&request).map_err(storage)?
+        {
+            return Err("optimization_checkpoint".into());
+        }
+        let checkpoint: OptimizationCheckpoint =
+            read_json(&directory.join(CHECKPOINT)).map_err(|_| "optimization_checkpoint")?;
+        if checkpoint.identity.schema_version != 1
+            || checkpoint.identity.job_id != request.job_id
+            || checkpoint.identity.input_hash != request.input_hash
+            || checkpoint.identity.fmax_ev_per_angstrom != 0.05
+            || checkpoint.identity.input_file_sha256 != digest(&input_path)?.1
+            || checkpoint.steps > 50
+            || !checkpoint.energy_hartree.is_finite()
+            || !checkpoint.max_force_ev_per_angstrom.is_finite()
+            || checkpoint.max_force_ev_per_angstrom < 0.0
+        {
+            return Err("optimization_checkpoint".into());
+        }
+        request.document = request
+            .document_at(&checkpoint.positions_angstrom)
+            .map_err(|_| "optimization_checkpoint")?;
+        request.input_hash = request.document.fingerprint();
+        Ok(request)
+    }
+
     fn make_receipt(
         &self,
         request: &JobRequest,
@@ -509,14 +600,24 @@ impl Catalog {
         request: &JobRequest,
         expected_receipt: Option<&str>,
     ) -> Result<Calculation, String> {
+        self.verify_with_field_digest(request, expected_receipt)
+            .map(|(result, _)| result)
+    }
+    fn verify_with_field_digest(
+        &self,
+        request: &JobRequest,
+        expected_receipt: Option<&str>,
+    ) -> Result<(Calculation, String), String> {
         let directory = self.directory(&request.job_id)?;
         let receipt_path = directory.join("completion.json");
-        if let Some(expected) = expected_receipt {
-            if digest(&receipt_path)?.1 != expected {
-                return Err("artifact_invalid".into());
-            }
+        let receipt_bytes = read_json_bytes(&receipt_path)?;
+        if expected_receipt
+            .is_some_and(|expected| format!("{:x}", Sha256::digest(&receipt_bytes)) != expected)
+        {
+            return Err("artifact_invalid".into());
         }
-        let receipt: Receipt = read_json(&receipt_path)?;
+        let receipt: Receipt =
+            serde_json::from_slice(&receipt_bytes).map_err(|_| "artifact_invalid")?;
         if receipt.schema_version != 1
             || receipt.job_id != request.job_id
             || receipt.input_hash != request.input_hash
@@ -542,7 +643,7 @@ impl Catalog {
         if result.job_id != request.job_id {
             return Err("artifact_invalid".into());
         }
-        Ok(result)
+        Ok((result, receipt.artifacts[2].sha256.clone()))
     }
     pub fn complete(&self, request: &JobRequest, calculation: &Calculation) -> Result<(), String> {
         let status = self.row(&request.job_id)?.1;
@@ -624,25 +725,36 @@ impl Catalog {
         Ok(())
     }
     pub fn restore(&self, id: &str) -> Result<Project, String> {
+        self.restore_with_field_digest(id)
+            .map(|(project, _)| project)
+    }
+    fn restore_with_field_digest(&self, id: &str) -> Result<(Project, String), String> {
         let (request, status, receipt) = self.row(id)?;
         if status != "succeeded" {
             return Err("job_not_succeeded".into());
         }
-        let result = self.verify(
+        let result = self.verify_with_field_digest(
             &request,
             Some(receipt.as_deref().ok_or("artifact_invalid")?),
         );
         match result {
-            Ok(calculation) => Ok(Project {
-                settings: request.effective_settings(),
-                document: Some(request.document),
-                calculation: Some(calculation),
-            }),
+            Ok((calculation, digest)) => Ok((
+                Project {
+                    settings: request.effective_settings(),
+                    document: Some(request.result_document(&calculation)?),
+                    calculation: Some(calculation),
+                },
+                digest,
+            )),
             Err(_) => {
                 self.update(id, "corrupt", Some("artifact_invalid"), None, None)?;
                 Err("artifact_invalid".into())
             }
         }
+    }
+    pub(crate) fn field_artifact(&self, id: &str) -> Result<(Project, PathBuf, String), String> {
+        let (project, digest) = self.restore_with_field_digest(id)?;
+        Ok((project, self.directory(id)?.join("result.h5"), digest))
     }
     fn recover(&self) -> Result<(), String> {
         let ids = {
@@ -800,6 +912,9 @@ mod tests {
     // Storage fixtures only. The separate catalog_probe uses real PySCF/HDF5 artifacts.
     fn outputs(root: &Path, request: &JobRequest) -> Calculation {
         let result = Calculation {
+            optimization: None,
+            spin_squared: None,
+            fields: Vec::new(),
             settings: None,
             job_id: request.job_id.clone(),
             input_hash: request.input_hash.clone(),

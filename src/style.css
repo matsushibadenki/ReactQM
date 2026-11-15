@@ -52,6 +52,7 @@ textarea, input[type=number] { width: 100%; font: inherit; color: inherit; backg
 textarea { min-height: 142px; resize: vertical; font: 12px/1.6 ui-monospace, monospace; margin: 6px 0 10px; }
 textarea:focus-visible, input:focus-visible { outline: 2px solid #3574c4; outline-offset: 2px; }
 .input-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; align-items: end; gap: 10px; }
+.multiplicity-editor { grid-template-columns: minmax(0, 12rem) auto; justify-content: start; margin-top: 8px; }
 .input-row label { display: grid; gap: 6px; }
 .method { margin: 20px 0; font-weight: 600; font-size: 18px; }
 .method span { color: #99a1ac; margin: 0 5px; font-weight: 400; }
@@ -277,3 +278,18 @@ main { padding-top: 0; }
 .settings-row label { display: grid; gap: 4px; flex: 1 1 120px; min-width: 0; }
 .settings-row select { width: 100%; min-width: 0; font-size: 12px; }
 .calculation-settings details { margin-top: 8px; }
+
+@media (max-width: 520px) {
+  .active-job-summary > small { flex-shrink: 1; min-width: 0; overflow-wrap: anywhere; }
+}
+
+
+.molecule-editor .viewport-tools { margin-top: 4px; }
+.editor-fields { display: flex; flex-wrap: wrap; gap: 6px; align-items: end; margin-top: 6px; }
+.editor-fields label { display: grid; flex: 0 1 6rem; min-width: 0; gap: 4px; }
+.editor-fields label:has(select) { flex-basis: 10rem; }
+.editor-fields input, .editor-fields select { width: 100%; min-width: 0; }
+
+.electronic-fields { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 6px; }
+.electronic-fields label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.electronic-fields select { min-width: 0; }

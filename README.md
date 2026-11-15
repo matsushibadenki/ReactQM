@@ -2,7 +2,7 @@
 
 Tauri 2 / Rustを中核に、React UI、Rust / wgpu描画、独立Python Workerを組み合わせる量子化学アプリです。
 
-現在は **XYZ入力 → wgpuの分子3D表示 → 閉殻HF／DFTの実計算 → 結果表示 → 保存／再読込** がmacOSで動作します。計算履歴はSQLiteへ自動記録し、再起動後も検証して復元できます。永続待機キューで複数の計算を順に実行できます。結果・履歴パネルはドック／独立表示と配置保存に対応しました。独立窓の位置・サイズ復元と画面外回収を実装済みです。SDF／SMILES入力と初期3D構造生成に対応しています。構造編集は次の段階です。
+現在は **XYZ入力 → wgpuの分子3D表示 → 閉殻・開殻HF／DFTの実計算 → 結果表示 → 保存／再読込** がmacOSで動作します。計算履歴はSQLiteへ自動記録し、再起動後も検証して復元できます。永続待機キューで複数の計算を順に実行できます。結果・履歴パネルはドック／独立表示と配置保存に対応しました。独立窓の位置・サイズ復元と画面外回収を実装済みです。SDF／SMILES入力と初期3D構造生成に対応しています。3Dビューで原子と結合を編集できます。
 
 ![ReactQMのmacOS実画面：H₂の3D表示とRHF/STO-3Gの収束結果](docs/images/reactqm-macos-h2.jpg)
 
@@ -41,7 +41,7 @@ UIのみ確認する場合は `npm run dev` を実行し、`http://127.0.0.1:142
 
 - 単一の連結分子、入力16 KiBまで、水素を含め64原子まで。閉殻系のH/B/C/N/O/F/Si/P/S/Cl/Br/Iが対象。ラジカル・同位体・分離断片・複数SDFレコードは拒否します。
 - SMILESと2D SDFは明示水素を追加し、ETKDGv3・固定seed（初期値42、0〜2147483647）・1スレッドで初期3D座標を作成します。3D SDFは既存原子の座標を保持し、必要な水素の座標を追加します。この場合seedは使いません。
-- 電荷は入力構造から取得し、スピン2Sは0です。XYZだけは従来どおり電荷・スピンを指定します。量子計算はH〜Neの閉殻RHF／RKSに対応します。
+- 電荷は入力構造から取得し、スピン2Sは0です。開殻分子の取り込みは、電荷とスピン多重度を指定したXYZを使用します。
 - 「生成した初期構造」／「取り込んだ3D座標」を開くと、RDKit版・生成方法・seed・元入力のSHA-256を確認できます。元入力・正準SMILESを含む生成記録は保存、Undo／Redo、待機列、計算履歴、再計算入力にも保持します。
 - これは量子化学的な構造最適化や最低エネルギー配座の探索ではありません。未指定の立体化学を一意に確定しません。同じ入力・seed・RDKit版と同じ実行環境で再生成を検証しており、環境をまたぐ完全一致は保証しません。
 - Rustが20秒の実行上限と子プロセス回収を管理します。失敗時や、他の窓で文書が変更された場合には現在の分子を置き換えません。座標・全結合配列はWorker／Rustに保持し、UIには送信しません。
@@ -55,7 +55,7 @@ English: Import one SMILES or SDF/MOL molecule. Seeded, single-threaded ETKDGv3 
 ## 最初の計算
 
 1. ツールバーの **H₂** または **H₂O** を押すか、「XYZを取り込む」を展開してXYZを入力し「適用」を押します。ファイルアイコンからXYZファイルを選ぶこともできます。
-2. 必要に応じて、取り込み前に電荷・スピン（2S）を設定します。
+2. 必要に応じて、取り込み前に電荷・スピン多重度（2S + 1）を設定します。
 3. 計算パネルの「次の計算」で手法・基底と必要なSCF設定を選び、上部の「待機列に追加」を押します。「待機列を再開」で投入順に実行します。実行中の分子名・SCF反復数・取消操作も上部に表示します。
 4. 収束した場合に全エネルギー（hartree / Eh）とエンジン版・計算時間を表示します。計算記録からjob IDと入力SHA-256を確認できます。
 5. 保存アイコンで現在の分子と結果を保存します。再読込アイコンで保存時点に戻せます。再起動後も同じ保存先から再読込できます。
@@ -152,11 +152,23 @@ English: Selecting an atom automatically estimates its valence (bond-order sum) 
 
 简体中文：选择原子后，RDKit根据坐标及分子总电荷自动推测原子价（键级总和）和形式电荷。须显式包含氢原子，并仅支持指定的闭壳层主族体系。结果标明推测及RDKit版本，不支持或失败时显示原因并可重试。3D显示成功推测的键级，否则明确标记为距离推测。
 
+## 分子エディター
+
+3Dビュー下の編集ツールで、元素記号とXYZ座標（Å）を入力して原子を追加します。原子は3D上のクリックかEnterで選択できます。移動はShift＋ドラッグ、または「原子を移動」でXYZ座標を入力します。「原子を削除」は選択原子とその結合を取り除きます。
+
+結合は、最初の原子を選んで「結合を編集」を押し、次に相手を選びます。結合なし・単結合・二重結合・三重結合から選べます。最初の結合編集時に表示中の結合一覧を取り込み、その後は手動編集した結合を3D表示とプロジェクト保存に使用します。手動結合の原子価は結合次数の合計です。
+
+上部のUndo／Redoで編集を1操作ずつ戻せます。原子の追加・削除後に現在の多重度が電子数と合わなくなった場合は、整合する最小の多重度に切り替わります。
+
+English: Add atoms by element and XYZ, select in 3D, and move with Shift-drag or exact coordinates. Select two atoms to add, remove, or change a bond. Edits support Undo/Redo and project save.
+
+简体中文：按元素和XYZ坐标添加原子，在三维视图中选取原子，按住Shift拖动或输入精确坐标进行移动。选择两个原子可添加、移除或修改化学键。编辑支持撤销、重做和项目保存。
+
 ## 現在の計算範囲
 
 - 基本XYZの単一フレーム、Å単位、1〜64原子、最大16 KiB。
 - 有限座標、原子間距離0.1 Å以上、|座標| ≤ 10,000 Å、|電荷| ≤ 64、電子数とスピンの整合性をRustで検証。
-- 文書としては全元素を識別しますが、**実計算はH〜Ne・スピン2S = 0の閉殻系** です。RHFまたはRKS（PBE／PBE0／B3LYP）とSTO-3G／6-31G／def2-SVPを選べます。
+- 文書としては全元素を識別しますが、**PySCFの実計算はH〜Ne** が対象です。RHF／UHF、RKS／UKS（PBE／PBE0／B3LYP）とSTO-3G／6-31G／def2-SVPを選べます。
 - SCFは1〜50反復、エネルギー収束閾値 `1e-12`〜`1e-6` Eh（既定50反復・`1e-9`）、DFTグリッド3／5、タイムアウト120秒。同時実行は1ジョブです。
 - 全エネルギーは核間反発を含み、ZPE・熱補正は含みません。収束は物理的精度や反応予測の正しさを保証する表示ではありません。
 - 未収束・異常終了・不正応答・入力との不一致は結果として採用しません。
@@ -167,15 +179,64 @@ H₂サンプルは0.74 Å、電荷0、2S = 0。検証値は約 **−1.116759307
 
 「次の計算」で手法・基底を変更すると、Rustの共有Projectへ反映し、Undo／Redo・保存／再読込にも保持します。変更は以降に投入するジョブへ適用します。表示済みの結果は消さず、その結果の実行条件を別に表示します。待機列・履歴にも条件を表示し、再計算は当時の条件を保持します。
 
-対応はRHF、閉殻RKSのPBE／PBE0／B3LYP、基底はSTO-3G／6-31G／def2-SVPです。開殻系（2S≠0）は拒否します。DFTの分散補正は含みません。SCFの数値収束や高いグリッド設定が物理的精度を保証するものではありません。グリッド依存性の自動評価は後続です。
+XYZ取り込み時、または読み込んだ分子の「スピン多重度」で、二重項なら2、三重項なら3を指定します。電子数と整合する値を受理し、非零スピンを指定するとRHF／RKSはそれぞれUHF／UKSへ切り替わります。単一点計算と構造最適化の両方でこの設定を使用します。UHF／UKSの結果は、計算した⟨S²⟩を目標値S(S+1)と並べて表示します。DFTの分散補正は含みません。SCFの数値収束や高いグリッド設定が物理的精度を保証するものではありません。グリッド依存性の自動評価は後続です。
 
 新規ジョブはmethod・basis・xc・max_cycle・conv_tol・grid_levelを入力／結果に記録し、Rustで完全一致を検査します。HDF5には同じ条件、PySCF版、DFTではLibXC版、エネルギーEh・勾配hartree/bohr・座標Åを保存します。保存Projectはschema v2で次の条件を含み、v1も読み込めます。既存の要求・結果の新フィールドは省略したまま往復するため、既存receiptのhashを作り直しません。
 
 `npm run test:settings` は実PBE／6-31GのH₂を永続キューへ投入し、再起動、実行、receipt検証、条件付き復元、Project v2、再計算条件を確認します。実測は−1.161904411329 Eh。Pythonでは4手法×3基底を同条件の直接PySCF実行と比較しました。macOS実画面でも保存条件読込→実計算→条件付き結果を確認しています。
 
-English: Choose RHF or closed-shell DFT (PBE/PBE0/B3LYP), basis, SCF limits/tolerance and DFT grid for the next job. Queued inputs and historical results retain their original settings; retry reproduces those settings. H–Ne, spin 0 only; no dispersion correction. Project v2 stores settings and reads v1.
+English: Set spin multiplicity during XYZ import or in the molecule panel. UHF and UKS (PBE/PBE0/B3LYP) support single-point calculations and geometry optimization, with computed and target ⟨S²⟩ shown in results. Queued inputs and historical results retain their original settings; retry reproduces those settings. H–Ne; no dispersion correction. Project v2 stores settings and reads v1.
 
-简体中文：可为下一任务选择RHF或闭壳层DFT（PBE／PBE0／B3LYP）、基组、SCF上限／阈值及DFT网格。加入队列后条件固定，结果显示实际执行条件，重新计算保留原条件。仅支持H–Ne、自旋0，不含色散校正。Project v2保存条件并兼容读取v1。
+简体中文：可在XYZ导入时或分子面板中设置自旋多重度。UHF和UKS（PBE／PBE0／B3LYP）支持单点计算及结构优化，结果显示计算得到的⟨S²⟩和目标值。加入队列后条件固定，结果显示实际执行条件，重新计算保留原条件。支持H–Ne，不含色散校正。Project v2保存条件并兼容读取v1。
+
+## 軌道・電子密度の等値面
+
+PySCFの単一点計算または構造最適化を実行し、3Dビュー下の「等値面」でHOMO、LUMO、電子密度を選択します。計算履歴から復元した結果でも利用できます。非制限計算では軌道をα・β別に表示し、占有または空軌道が存在するスピン成分を選べます。
+
+軌道の青と赤は波動関数の正負、緑は全電子密度です。格子は40³点、表示値は軌道 ±0.03 bohr⁻³⁄²、密度 0.02電子/bohr³ です。格子が固定のため、大きな分子ほど空間分解能が粗くなります。従来のPySCF成果物は再計算すると等値面を利用できます。等値面のデータはジョブフォルダのHDF5に保持されます。
+
+`npm run test:fields` はH₂を実計算し、SQLite再オープン後に3種類を読み戻し、wgpuの描画色と改変検出を検証します。Metalアクセスが必要です。
+
+English: After a PySCF calculation or history restore, use the isosurface selector below the 3D view. Orbital phases are blue and red, while total density is green.
+
+简体中文：在 PySCF 计算完成或从历史恢复后，可在三维视图下选择等值面。轨道正负相位分别以蓝色和红色显示，总电子密度以绿色显示。
+
+## GFN2-xTBの高速スクリーニング
+
+開発環境のWorkerにオプションのtbliteを追加します。検証環境はApple Silicon macOS、Python 3.12、tblite 0.8.0です。macOSの公式ホイールはmacOS 15以降を対象とします。
+
+```sh
+uv sync --project worker --locked --extra screening
+npm run test:screening
+```
+
+計算パネルで **GFN2-xTB** を選び、上部の「待機列に追加」を押します。対応範囲はH〜Rn、1〜64原子、電荷と電子数が整合する一重項です。気相の単一点計算をSCC最大250反復・精度設定1.0・電子温度300 Kで実行します。構造候補のエネルギーは同じ手法・組成・電荷の範囲で比較します。
+
+結果パネルに全エネルギー（Eh）とtblite版を表示します。履歴から検証付きで復元・再計算でき、プロジェクトとして保存できます。HDF5には勾配（hartree/bohr）、座標（Å）、電荷、多重度、収束と実行条件を保存します。
+
+English: Install the optional screening extra, select GFN2-xTB and add a single-point job to the queue. The result, conditions and engine version are available in history and project saves.
+
+简体中文：安装可选的筛选依赖，选择 GFN2-xTB 并将单点任务加入队列。历史记录和项目保存包含结果、计算条件和引擎版本。
+
+## デスクトップでの構造最適化
+
+分子を開き、計算パネルで手法と基底を選んで「最適化を追加」を押します。待機列を再開するとASE BFGSが実行され、上部に構造ステップが表示されます。既存の取消ボタンで待機中・実行中のジョブを取り消せます。1試行は最大50ステップ・600秒で、最大力が0.05 eV/Å未満になると収束します。
+
+評価済み座標のある取消・中断・失敗ジョブは、履歴の「保存座標から再開」で同じ計算条件の新しい試行を追加できます。最後に評価した座標を初期値とし、BFGSの近似ヘッセ行列は初期化します。通常の「保存条件で再計算」は、その試行の入力座標から開始します。
+
+収束時、投入時の文書と条件を表示し続けていた場合は、最適化した構造と結果を3Dビューへ反映します。別の文書に移った場合や再起動後は、計算履歴から検証して復元できます。自動反映はUndoで戻せます。
+
+## 構造最適化（Worker CLI）
+
+完了済み計算などの `input.json` を使い、ASE BFGSで構造を緩和できます。以下はmacOSでリポジトリ直下から実行する例です。出力先には新しいディレクトリを指定してください。
+
+```sh
+PYTHONPATH=worker/src worker/.venv/bin/python -m reactqm_worker optimize \
+  --input /path/to/job/input.json --output-dir /path/to/new-optimization \
+  --fmax 0.05 --steps 50
+```
+
+`--fmax` は最大原子力の閾値（eV/Å）、`--steps` は1回あたりのステップ上限です。終了コード0は収束、2はステップ上限、1はエラーです。停止後は同じ入力・閾値・出力先で `--resume` を付けると、最後に評価できた座標から再開します。再開時にBFGSの近似ヘッセ行列を初期化します。収束後は `optimization-result.json` と `optimized.xyz` が作成されます。XYZをアプリで開く際は、元の電荷とスピンを指定してください。デスクトップでは上記の待機列から実行できます。
 
 ## 保存先と開発用設定
 

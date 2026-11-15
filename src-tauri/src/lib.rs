@@ -1,5 +1,7 @@
 pub mod catalog;
 pub mod document;
+mod editor;
+pub mod fields;
 pub mod jobs;
 pub mod layout;
 pub mod panel_windows;
@@ -78,7 +80,7 @@ fn import_xyz(
     let snapshot = {
         let mut workspace = state.0.lock().map_err(|e| e.to_string())?;
         check_revision(&workspace, expected_revision)?;
-        let settings = workspace.project.settings.clone();
+        let settings = workspace.project.settings.clone().for_spin(document.spin);
         workspace.replace_project(Project {
             settings,
             document: Some(document),
@@ -88,6 +90,31 @@ fn import_xyz(
     };
     publish(&app, snapshot)
 }
+#[tauri::command]
+fn set_multiplicity(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    expected_revision: u64,
+    multiplicity: u32,
+) -> Result<WorkspaceSnapshot, String> {
+    let spin = multiplicity.checked_sub(1).ok_or("electron_spin")?;
+    let snapshot = {
+        let mut workspace = state.0.lock().map_err(|e| e.to_string())?;
+        check_revision(&workspace, expected_revision)?;
+        let mut project = workspace.project.clone();
+        let document = project.document.as_mut().ok_or("no_document")?;
+        if document.spin != spin {
+            document.spin = spin;
+            document.validate()?;
+            project.calculation = None;
+            project.settings = project.settings.for_spin(spin);
+            workspace.replace_project(project)?;
+        }
+        workspace.snapshot()
+    };
+    publish(&app, snapshot)
+}
+
 #[tauri::command]
 fn history_step(
     app: tauri::AppHandle,
@@ -171,6 +198,13 @@ fn set_calculation_settings(
         let mut workspace = state.0.lock().map_err(|e| e.to_string())?;
         check_revision(&workspace, expected_revision)?;
         let mut project = workspace.project.clone();
+        if let Some(document) = &project.document {
+            if settings.method == settings::SCREENING {
+                settings.validate_screening_input(document)?;
+            } else if document.spin > 0 && !settings.is_unrestricted() {
+                return Err("rhf_spin".into());
+            }
+        }
         project.settings = settings;
         workspace.replace_project(project)?;
         workspace.snapshot()
@@ -182,13 +216,44 @@ fn start_calculation(
     app: tauri::AppHandle,
     expected_revision: u64,
 ) -> Result<WorkspaceSnapshot, String> {
-    launch_calculation(app, expected_revision, None)
+    launch_calculation(app, expected_revision, None, false)
+}
+
+#[tauri::command]
+fn start_optimization(
+    app: tauri::AppHandle,
+    expected_revision: u64,
+) -> Result<WorkspaceSnapshot, String> {
+    launch_calculation(app, expected_revision, None, true)
+}
+
+#[tauri::command]
+async fn resume_optimization(
+    app: tauri::AppHandle,
+    id: String,
+    expected_revision: u64,
+) -> Result<WorkspaceSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let catalog = app.state::<CatalogState>();
+        let store = catalog.get()?;
+        let original = store.retry_source(&id)?;
+        let request = store.resume_source(&id)?;
+        launch_calculation(
+            app,
+            expected_revision,
+            Some((request, Some(original.input_hash))),
+            true,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn launch_calculation(
     app: tauri::AppHandle,
     expected_revision: u64,
-    source: Option<JobRequest>,
+    source: Option<(JobRequest, Option<String>)>,
+    optimize: bool,
 ) -> Result<WorkspaceSnapshot, String> {
     let runner = app.state::<Scheduler>();
     let gate = runner.gate.lock().map_err(|e| e.to_string())?;
@@ -199,10 +264,11 @@ fn launch_calculation(
         let state = app.state::<AppState>();
         let mut workspace = state.0.lock().map_err(|e| e.to_string())?;
         check_revision(&workspace, expected_revision)?;
-        let (request, retry_of) = if let Some(source) = source {
+        let (mut request, retry_of, resume_input) = if let Some((source, resume_input)) = source {
             (
                 source.retry(workspace.document_revision)?,
                 Some(source.job_id),
+                resume_input,
             )
         } else {
             (
@@ -212,15 +278,27 @@ fn launch_calculation(
                     workspace.project.settings.clone(),
                 )?,
                 None,
+                None,
             )
         };
+        if retry_of.is_none() {
+            request.optimize = optimize;
+        }
         app.state::<CatalogState>()
             .get()?
             .enqueue(&request, retry_of.as_deref())?;
         let revision = workspace.document_revision;
-        workspace
-            .result_targets
-            .insert(request.job_id.clone(), revision);
+        let matching_input = workspace.project.document.as_ref().is_some_and(|document| {
+            let hash = document.fingerprint();
+            hash == request.input_hash || resume_input.as_ref() == Some(&hash)
+        });
+        if !request.optimize
+            || (matching_input && workspace.project.settings == request.effective_settings())
+        {
+            workspace
+                .result_targets
+                .insert(request.job_id.clone(), revision);
+        }
         workspace.revision += 1;
         workspace.snapshot()
     };
@@ -314,7 +392,7 @@ async fn retry_job(
 ) -> Result<WorkspaceSnapshot, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let request = app.state::<CatalogState>().get()?.retry_source(&id)?;
-        launch_calculation(app, expected_revision, Some(request))
+        launch_calculation(app, expected_revision, Some((request, None)), false)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -348,6 +426,10 @@ async fn update_viewport(
                         request,
                         project.document.as_ref(),
                         *document_revision,
+                        project
+                            .calculation
+                            .as_ref()
+                            .map(|result| result.job_id.as_str()),
                     )
                 })();
                 let _ = sender.try_send(result);
@@ -442,6 +524,9 @@ pub fn run() {
             panel_windows::update_layout,
             set_locale,
             import_xyz,
+            set_multiplicity,
+            editor::edit_molecule,
+            fields::set_electronic_field,
             structure::import_structure,
             history_step,
             save_project,
@@ -453,6 +538,8 @@ pub fn run() {
             restore_job,
             retry_job,
             start_calculation,
+            start_optimization,
+            resume_optimization,
             set_calculation_settings,
             cancel_job
         ])

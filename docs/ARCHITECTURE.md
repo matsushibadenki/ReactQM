@@ -49,6 +49,12 @@ One application-owned scheduler executes a FIFO queue, one job at a time; additi
 
 Successful results require all of: matching job ID and input, valid schema, finite values, `converged=true`, and a successful process exit. Nonconvergence is an error, never a usable energy result. A cancelled/expired job cannot attach a late success. The current progress is SCF cycle count, not a predicted completion percentage.
 
+## Molecule editor
+
+The edit_molecule command checks the document revision and validates the complete candidate before replacing the shared Project. Each accepted edit creates one Undo entry. The viewport sends normalized drag endpoints, and Rust resolves the picked atom and unprojects the displacement at its depth. Editing invalidates the attached calculation and import provenance. Existing queued inputs retain their original document.
+
+The optional Document bond list is sorted and validated for unique atom pairs and integer orders 1–3. An absent list keeps automatic perception and an explicit empty list renders zero bonds. The first bond edit copies the displayed Rust graph. Manual bonds survive project save, restoration and optimization, and renderer analysis cannot overwrite them. IPC returns just the selected atom's incident bonds.
+
 ## Units and interpretation
 
 Document coordinates: Å. PySCF `kernel()` returns total clamped-nuclei energy in hartree, including nuclear repulsion, without ZPE or thermal corrections. The UI labels it total energy. Nuclear gradients are stored in hartree / bohr. Spin is `2S`; multiplicity is `2S + 1`.
@@ -192,6 +198,23 @@ Validation: Python repeated seeds, charged/aromatic/stereo molecules, SDF 2D/3D 
 
 `JobRequest::with_settings` freezes a complete settings envelope alongside legacy method/basis/max_cycle/conv_tol fields, which must agree. Old requests omit this optional field on serialization; their legacy RHF/STO-3G contract and byte-integrity checks remain supported. New Worker results must echo the complete envelope. Both process result acceptance and catalog receipt/restore validate it against the request. Settings are included in immutable input/receipt hashes; `input_hash` continues to mean Document fingerprint. Project saves use schema v2 and accept v1, with default next settings for v1. A legacy result lacking echoed settings is accepted only under its original legacy contract.
 
-The independent Worker dispatches to PySCF RHF or RKS, assigns the allowlisted xc, basis and grid (3 or 5), and retains the existing convergence/exit/finite-gradient requirements. HDF5 records settings JSON, cycles/tolerance, PySCF version and DFT LibXC version, with existing energy/gradient/coordinate units. No dispersion, open-shell, geometry optimization or automatic grid convergence is implied. See [PySCF DFT](https://pyscf.org/user/dft) for the underlying adapter API. Numerical regression is not a physical-accuracy guarantee.
+The independent Worker dispatches to PySCF RHF, RKS, UHF or UKS, assigns the allowlisted xc, basis and grid (3 or 5), and retains the existing convergence/exit/finite-gradient requirements. HDF5 records settings JSON, cycles/tolerance, PySCF version and DFT LibXC version, with existing energy/gradient/coordinate units. The desktop edits multiplicity while Document and the Worker exchange 2S. Nonzero spin requires UHF/UKS, with electron-count parity validated by Rust and Python. Unrestricted results persist the finite ⟨S²⟩ scalar in result JSON and HDF5. The same evaluator supplies analytic gradients to ASE BFGS. Dispersion and automatic grid convergence are future work. See [PySCF DFT](https://pyscf.org/user/dft) for the underlying adapter API. Numerical regression is not a physical-accuracy guarantee.
 
 The history and queue projections extract only settings from saved request JSON, never atom/source arrays. Invalid stored requests do not invent a settings label. `settings_probe` executes PBE/6-31G through the real persistent queue, restart, receipt, restore, retry and Project v2. Python compares 4 methods × 3 bases with direct PySCF and checks finite translationally invariant gradients and units, grid 5 and nonconvergence. Rust tests include mismatched result conditions, bad settings, old request serialization and Project v1/v2 compatibility.
+
+
+## Geometry optimization worker
+
+The local `optimize` command accepts an existing calculation input and reuses the single-point PySCF energy and gradient evaluator. ASE receives energy in eV and forces in eV/Å via the negative gradient multiplied by Hartree/Bohr in ASE units. BFGS uses a maximum displacement of 0.1 Å per atom per step and checks the maximum force norm. [ASE optimization API](https://ase.gitlab.io/ase/ase/optimize.html)
+
+Each evaluated geometry is saved by atomic replacement. The checkpoint binds the original request, force threshold and engine versions. A Unix file lock serializes CLI invocations for the same output directory. Restart seeds a fresh BFGS optimizer with the last evaluated coordinates and retains the cumulative step count. Successful runs export XYZ and a scalar/geometry JSON result. Desktop jobs set an optional optimization flag in the immutable request. The same queue, process group, cancellation state and completion receipt protect execution and artifacts. The Worker emits evaluated geometry step numbers, saves checkpoints before notifying the UI and records converged coordinates in the checksummed result. For history resume, Rust checks the checkpoint against the immutable input file, job identity, geometry and bounds, then enqueues a linked attempt using the saved geometry and original electronic settings. Only scalar optimization metadata crosses application IPC. Rust reconstructs the optimized Document for rendering and uses the enqueue-time revision to guard automatic replacement. History restoration verifies the completed artifacts before opening the geometry.
+
+
+## GFN2-xTB screening
+
+The optional locked Worker extra loads tblite in the existing isolated process. GFN2-xTB is a gas-phase singlet single point for H–Rn. The request envelope uses the built-in GFN2 basis identifier and a zero placeholder for the inapplicable PySCF convergence tolerance. The adapter converts Å to bohr and persists explicit SCC settings, charge, multiplicity, convergence, native and binding versions, and atomic-unit energy/gradient in HDF5. The queue, timeout, cancellation and receipt verification follow the same execution path as PySCF jobs. Missing tblite and SCC nonconvergence are distinct failed-job states.
+
+
+## Electronic fields
+
+The PySCF Worker samples converged orbitals and total density on a 40³ Cartesian grid from the final geometry and stores the grids, Å origin/spacing, units and orbital provenance in the checksummed result HDF5. Density is the sum of both spin components for unrestricted calculations. HDF5 extraction runs in a bounded Worker process, verifies the bytes against the stored receipt, and returns one binary grid to Rust. Rust extracts both signed orbital phases (or the single positive density phase) with marching tetrahedra outside the UI thread. The native viewport caches the triangle buffers in wgpu. WebView receives availability and sends selection commands only. A revision and job identity guard prevents late loads from attaching to a changed project.

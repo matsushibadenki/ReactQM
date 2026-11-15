@@ -4,7 +4,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { messages, errorMessage, type Locale } from './i18n';
 import './style.css';
-import { MoleculeViewport } from './MoleculeViewport';
+import { MoleculeViewport, type FieldResult } from './MoleculeViewport';
 import { JobHistory } from './JobHistory';
 import { useQueue } from './useQueue';
 import { QueueToolbar } from './QueueToolbar';
@@ -13,12 +13,12 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useLayout, type PanelId } from './useLayout';
 import { DockWorkspace, FloatingPanel, LayoutTools, panelTitle } from './DockWorkspace';
 
-type Calculation = { job_id: string; input_hash: string; method: string; basis: string; energy_hartree: number; engine_version: string; elapsed_seconds: number; converged: boolean; settings?: Settings };
+type Calculation = FieldResult & { input_hash: string; basis: string; energy_hartree: number; engine_version: string; elapsed_seconds: number; converged: boolean; settings?: Settings; spin_squared?: number; optimization?: { steps: number; max_force_ev_per_angstrom: number; ase_version: string } };
 type JobStatus = 'running' | 'cancelling' | 'succeeded' | 'cancelled' | 'failed' | 'timed_out' | 'interrupted' | 'corrupt';
 type InputFormat = 'xyz' | 'smiles' | 'sdf';
 type StructureSource = { format: string; method: 'etkdgv3' | 'sdf_3d'; seed: number | null; engineVersion: string; inputHash: string };
-type Snapshot = { revision: number; documentRevision: number; locale: Locale; atomCount: number; name: string; formula: string; charge: number; spin: number; rendererReady: boolean; canUndo: boolean; canRedo: boolean; dirty: boolean; hasSaved: boolean; calculation: Calculation | null; job: { id: string; status: JobStatus; cycle: number; error: string | null } | null; busy: boolean; structureSource: StructureSource | null; settings: Settings };
-const initial: Snapshot = { revision: 0, documentRevision: 0, locale: 'ja', atomCount: 0, name: '', formula: '', charge: 0, spin: 0, rendererReady: false, canUndo: false, canRedo: false, dirty: false, hasSaved: false, calculation: null, job: null, busy: false, structureSource: null, settings: defaultSettings };
+type Snapshot = { revision: number; documentRevision: number; locale: Locale; atomCount: number; manualBonds: boolean; name: string; formula: string; charge: number; spin: number; rendererReady: boolean; canUndo: boolean; canRedo: boolean; dirty: boolean; hasSaved: boolean; calculation: Calculation | null; job: { id: string; status: JobStatus; cycle: number; error: string | null } | null; busy: boolean; structureSource: StructureSource | null; settings: Settings };
+const initial: Snapshot = { revision: 0, documentRevision: 0, locale: 'ja', atomCount: 0, manualBonds: false, name: '', formula: '', charge: 0, spin: 0, rendererReady: false, canUndo: false, canRedo: false, dirty: false, hasSaved: false, calculation: null, job: null, busy: false, structureSource: null, settings: defaultSettings };
 const native = isTauri();
 const windowPanel: PanelId | null = native && getCurrentWindow().label === 'panel-result' ? 'result' : native && getCurrentWindow().label === 'panel-history' ? 'history' : null;
 const hydrogen = '2\nH₂ · 0.74 Å\nH 0 0 0\nH 0 0 0.74\n';
@@ -48,7 +48,7 @@ function App() {
   const [format, setFormat] = useState<InputFormat>('smiles');
   const [seed, setSeed] = useState('42');
   const [charge, setCharge] = useState('0');
-  const [spin, setSpin] = useState('0');
+  const [multiplicity, setMultiplicity] = useState('1');
   const file = useRef<HTMLInputElement>(null);
   const queue = useQueue();
   const layout = useLayout();
@@ -90,8 +90,8 @@ function App() {
       if (await command('import_structure', { format: inputFormat, text, seed: value }, 'imported')) setDraft('');
       return;
     }
-    const q = sample ? 0 : Number(charge), s = sample ? 0 : Number(spin);
-    if (!Number.isSafeInteger(q) || q < -2147483648 || q > 2147483647 || !Number.isSafeInteger(s) || s < 0 || s > 4294967295 || (!sample && (!charge.trim() || !spin.trim()))) { setError('numeric_input'); return; }
+    const q = sample ? 0 : Number(charge), s = sample ? 0 : Number(multiplicity) - 1;
+    if (!Number.isSafeInteger(q) || q < -2147483648 || q > 2147483647 || !Number.isSafeInteger(s) || s < 0 || s > 4294967295 || (!sample && (!charge.trim() || !multiplicity.trim()))) { setError('numeric_input'); return; }
     if (await command('import_xyz', { text, charge: q, spin: s }, 'imported')) setDraft('');
   }
   const jobError = snapshot.job?.error;
@@ -100,26 +100,32 @@ function App() {
 
   const moleculePanel = (      <section aria-labelledby="molecule-title">
         <div className="heading"><h2 id="molecule-title">{t.molecule}</h2>{snapshot.dirty ? <span className="dirty" aria-label={t.unsaved} title={t.unsaved}>●</span> : null}</div>
-        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} />
+        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} manualBonds={snapshot.manualBonds} result={result} editingDisabled={locked} onEdit={edit => void command('edit_molecule', { edit })} />
         <div className="molecule-summary"><strong className="formula">{snapshot.formula || '—'}</strong><span>{snapshot.atomCount ? snapshot.name || t.untitled : t.empty}</span></div>
-        <dl className="metrics"><div><dt>{t.atoms}</dt><dd>{snapshot.atomCount}</dd></div><div><dt>{t.charge} <Info text={t.chargeHelp} /></dt><dd>{snapshot.charge === 0 ? `0 · ${t.neutral}` : snapshot.charge > 0 ? `+${snapshot.charge}` : `−${Math.abs(snapshot.charge)}`}</dd></div><div><dt>{t.spin}</dt><dd>{snapshot.spin}</dd></div></dl>
+        <dl className="metrics"><div><dt>{t.atoms}</dt><dd>{snapshot.atomCount}</dd></div><div><dt>{t.charge} <Info text={t.chargeHelp} /></dt><dd>{snapshot.charge === 0 ? `0 · ${t.neutral}` : snapshot.charge > 0 ? `+${snapshot.charge}` : `−${Math.abs(snapshot.charge)}`}</dd></div><div><dt>{t.spin} <Info text={t.spinHelp} /></dt><dd>{snapshot.atomCount ? snapshot.spin + 1 : '—'}</dd></div></dl>
+        {snapshot.atomCount ? <form key={snapshot.documentRevision} className="input-row multiplicity-editor" onSubmit={event => {
+          event.preventDefault();
+          const value = Number(new FormData(event.currentTarget).get('multiplicity'));
+          if (value !== snapshot.spin + 1) void command('set_multiplicity', { multiplicity: value });
+        }}><label>{t.spin}<input name="multiplicity" type="number" min="1" step="1" required defaultValue={snapshot.spin + 1} disabled={locked} /></label><button type="submit" disabled={locked}>{t.apply}</button></form> : null}
         {snapshot.structureSource ? <details className="structure-source"><summary>{snapshot.structureSource.method === 'etkdgv3' ? t.initialGeometry : t.preservedGeometry} · RDKit {snapshot.structureSource.engineVersion}</summary><div className="heading"><span>{snapshot.structureSource.format.toUpperCase()}</span><Info text={t.structureHelp} /></div>{snapshot.structureSource.seed !== null ? <div>{t.seed}: {snapshot.structureSource.seed} · ETKDGv3</div> : null}<code>SHA-256 {snapshot.structureSource.inputHash}</code></details> : null}
         <details className="xyz-editor"><summary>{t.importTitle}</summary><form onSubmit={event => { event.preventDefault(); void importText(draft); }}>
           <div className="heading"><label>{t.inputFormat}<select aria-label={t.inputFormat} value={format} disabled={locked} onChange={event => setFormat(event.target.value as InputFormat)}><option value="smiles">SMILES</option><option value="sdf">SDF / MOL</option><option value="xyz">XYZ</option></select></label><Info text={format === 'xyz' ? t.inputHelp : t.structureHelp} /></div>
           <textarea id="xyz" aria-label={t.draft} spellCheck={false} value={draft} disabled={locked} maxLength={16_384} placeholder={format === 'smiles' ? 'CCO' : format === 'sdf' ? t.sdfPlaceholder : '2\nH₂\nH 0 0 0\nH 0 0 0.74'} onChange={event => setDraft(event.target.value)} />
-          <div className="input-row">{format === 'xyz' ? <><label><span>{t.charge}</span><input type="number" step="1" value={charge} disabled={locked} onChange={event => setCharge(event.target.value)} /></label><label>{t.spin}<input type="number" min="0" step="1" value={spin} disabled={locked} onChange={event => setSpin(event.target.value)} /></label></> : <label>{t.seed}<input type="number" min="0" max="2147483647" step="1" value={seed} disabled={locked} onChange={event => setSeed(event.target.value)} /></label>}<button type="submit" disabled={locked || !draft.trim()}>{t.apply}</button></div>
+          <div className="input-row">{format === 'xyz' ? <><label><span>{t.charge}</span><input type="number" step="1" value={charge} disabled={locked} onChange={event => setCharge(event.target.value)} /></label><label>{t.spin}<input type="number" min="1" step="1" value={multiplicity} disabled={locked} onChange={event => setMultiplicity(event.target.value)} /></label></> : <label>{t.seed}<input type="number" min="0" max="2147483647" step="1" value={seed} disabled={locked} onChange={event => setSeed(event.target.value)} /></label>}<button type="submit" disabled={locked || !draft.trim()}>{t.apply}</button></div>
         </form></details>
       </section>);
   const panels = {
-    result: <><div className="result-help"><Info text={t.calculationHelp} /></div>        <CalculationControls settings={snapshot.settings ?? defaultSettings} locale={snapshot.locale} disabled={locked} onChange={settings => void command('set_calculation_settings', { settings })} />
+    result: <><div className="result-help"><Info text={(result?.method ?? snapshot.settings?.method) === 'GFN2-xTB' ? t.screeningHelp : t.calculationHelp} /></div>        <CalculationControls settings={snapshot.settings ?? defaultSettings} locale={snapshot.locale} spin={snapshot.spin} disabled={locked} onChange={settings => void command('set_calculation_settings', { settings })} />
         <div className="calculation-actions">
           <span className="job-status" role="status">{result ? t.succeeded : t.noResult}</span>
         </div>
         {result ? <div className="result">
+          {result.optimization ? <p className="job-status">{t.optimizeStructure} · ASE BFGS {result.optimization.ase_version} · {t.optimizationStep} {result.optimization.steps} · {t.maximumForce} {result.optimization.max_force_ev_per_angstrom.toPrecision(3)} eV/Å</p> : null}
           <div className="method">{result.settings ? conditionLabel(result.settings) : `${result.method} / ${result.basis.toUpperCase()}`}</div>
           <span className="eyebrow">{t.energy}</span><div className="energy"><output>{result.energy_hartree.toFixed(10)}</output><span>Eh</span></div>
-          <dl><div><dt>{t.engine}</dt><dd>PySCF {result.engine_version}</dd></div><div><dt>{t.elapsed}</dt><dd>{result.elapsed_seconds.toFixed(2)} s</dd></div></dl>
-          <details><summary>{t.provenance}</summary><code>{result.job_id}</code><code>SHA-256 {result.input_hash}</code>{result.settings ? <code>SCF ≤ {result.settings.max_cycle} · {result.settings.conv_tol.toExponential()} Eh{result.settings.grid_level ? ` · Grid ${result.settings.grid_level}` : ''}</code> : null}</details>
+          <dl>{result.spin_squared !== undefined ? <div><dt>⟨S²⟩ <Info text={t.spinSquaredHelp} /></dt><dd>{result.spin_squared.toFixed(4)} / {(snapshot.spin * (snapshot.spin + 2) / 4).toFixed(4)}</dd></div> : null}<div><dt>{t.engine}</dt><dd>{result.method === 'GFN2-xTB' ? 'tblite' : 'PySCF'} {result.engine_version}</dd></div><div><dt>{t.elapsed}</dt><dd>{result.elapsed_seconds.toFixed(2)} s</dd></div></dl>
+          <details><summary>{t.provenance}</summary><code>{result.job_id}</code><code>SHA-256 {result.input_hash}</code>{result.method === 'GFN2-xTB' ? <code>SCC ≤ 250 · {t.screeningAccuracy} 1.0 · 300 K</code> : result.settings ? <code>SCF ≤ {result.settings.max_cycle} · {result.settings.conv_tol.toExponential()} Eh{result.settings.grid_level ? ` · Grid ${result.settings.grid_level}` : ''}</code> : null}</details>
         </div> : null}
 </>,
     history: <JobHistory locale={snapshot.locale} busy={locked} queueState={queue} onAction={command} />,
@@ -147,10 +153,11 @@ function App() {
           <button title={t.redo} aria-label={t.redo} disabled={locked || !snapshot.canRedo} onClick={() => void command('history_step', { redo: true })}><Icon name="redo" /></button>
         </div>
         <div className="toolbar-group">
-          <button title={t.save} aria-label={t.save} disabled={locked || !snapshot.atomCount} onClick={() => void command('save_project', {}, 'saved')}><Icon name="save" /></button>
+          <button title={t.save} aria-label={t.save} disabled={locked || (!snapshot.atomCount && !snapshot.dirty)} onClick={() => void command('save_project', {}, 'saved')}><Icon name="save" /></button>
           <button title={t.reload} aria-label={t.reload} disabled={locked || !snapshot.hasSaved} onClick={() => void command('load_project', {}, 'loaded')}><Icon name="reload" /></button>
           <Info text={t.saveHelp} />
         </div>
+        <button type="button" disabled={locked || snapshot.atomCount < 2 || snapshot.settings?.method === 'GFN2-xTB'} onClick={() => void command('start_optimization')} title={snapshot.settings?.method === 'GFN2-xTB' ? t.screeningHelp : t.optimizationHelp}>{t.enqueueOptimization}</button>
         <button className="primary enqueue-button" disabled={locked || !snapshot.atomCount} onClick={() => void command('start_calculation')}><Icon name="play" />{t.enqueue}</button>
         <LayoutTools state={layout} locale={snapshot.locale} />
       </nav> : null}

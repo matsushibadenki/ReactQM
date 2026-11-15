@@ -116,6 +116,42 @@ fn cylinder() -> (Vec<Vertex>, Vec<u32>) {
     (vertices, indices)
 }
 
+pub struct SurfaceMeshes {
+    phases: [Option<(wgpu::Buffer, u32)>; 2],
+    density: bool,
+}
+
+impl SurfaceMeshes {
+    pub fn upload(gpu: &GpuContext, surface: &crate::fields::Surface) -> Self {
+        let phases = surface.phases.each_ref().map(|vertices| {
+            (!vertices.is_empty()).then(|| {
+                (
+                    gpu.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("electronic isosurface"),
+                            contents: bytemuck::cast_slice(vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        }),
+                    vertices.len() as u32,
+                )
+            })
+        });
+        Self {
+            phases,
+            density: surface.density,
+        }
+    }
+
+    pub fn instances(&self) -> [Instance; 2] {
+        let positive = if self.density {
+            [0.04, 0.62, 0.42, 1.0]
+        } else {
+            [0.07, 0.42, 0.95, 1.0]
+        };
+        [positive, [0.94, 0.16, 0.30, 1.0]].map(|color| Instance::new(glam::Mat4::IDENTITY, color))
+    }
+}
+
 pub struct RenderCore {
     pipeline: wgpu::RenderPipeline,
     bind_layout: wgpu::BindGroupLayout,
@@ -337,6 +373,25 @@ impl RenderCore {
         dark: bool,
         region: Option<ViewRegion>,
     ) {
+        self.draw_with_surface(
+            gpu, view, targets, binding, scene, camera, show_bonds, dark, region, None,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_with_surface(
+        &self,
+        gpu: &GpuContext,
+        view: &wgpu::TextureView,
+        targets: &Targets,
+        binding: &wgpu::BindGroup,
+        scene: &Scene,
+        camera: &Camera,
+        show_bonds: bool,
+        dark: bool,
+        region: Option<ViewRegion>,
+        surface: Option<&SurfaceMeshes>,
+    ) {
         let region = region.unwrap_or(ViewRegion {
             aspect: targets.width as f32 / targets.height as f32,
             crop: [0.0, 0.0, 1.0, 1.0],
@@ -402,6 +457,21 @@ impl RenderCore {
             if show_bonds {
                 self.cylinder
                     .draw(&mut pass, atoms..atoms + scene.bond_instance_count());
+            }
+            if let Some(surface) = surface {
+                let offset = atoms
+                    + if show_bonds {
+                        scene.bond_instance_count()
+                    } else {
+                        0
+                    };
+                for (phase, mesh) in surface.phases.iter().enumerate() {
+                    if let Some((vertices, count)) = mesh {
+                        let index = offset + phase as u32;
+                        pass.set_vertex_buffer(0, vertices.slice(..));
+                        pass.draw(0..*count, index..index + 1);
+                    }
+                }
             }
         }
         gpu.queue.submit(Some(encoder.finish()));

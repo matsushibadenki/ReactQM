@@ -29,7 +29,7 @@ pub struct Instance {
     pub color: [f32; 4],
 }
 impl Instance {
-    fn new(model: Mat4, color: [f32; 4]) -> Self {
+    pub(crate) fn new(model: Mat4, color: [f32; 4]) -> Self {
         Self {
             model: model.to_cols_array_2d(),
             normal: model.inverse().transpose().to_cols_array_2d(),
@@ -67,24 +67,31 @@ impl Scene {
             .map(|a| a.position.distance(center) + a.radius)
             .fold(0.5, f32::max);
         let mut bonds = Vec::new();
-        for (i, a) in atoms.iter().enumerate() {
-            for (j, b) in atoms[..i].iter().enumerate() {
-                // Geometry-only hints: no bond order, charge/valence model or chemistry mutation.
-                // Noble gases are deliberately excluded from this visualization heuristic.
-                if [2, 10, 18, 36, 54, 86, 118].contains(&a.atomic_number)
-                    || [2, 10, 18, 36, 54, 86, 118].contains(&b.atomic_number)
-                {
-                    continue;
-                }
-                let cutoff = 1.2
-                    * (COVALENT_RADII[a.atomic_number as usize]
-                        + COVALENT_RADII[b.atomic_number as usize]);
-                let distance = a.position.distance(b.position);
-                if distance > 0.1 && distance <= cutoff {
-                    bonds.push(DisplayBond {
-                        atoms: [j, i],
-                        order: 1,
-                    });
+        if let Some(explicit) = &document.bonds {
+            bonds.extend(explicit.iter().map(|bond| DisplayBond {
+                atoms: bond.atoms,
+                order: bond.order,
+            }));
+        } else {
+            for (i, a) in atoms.iter().enumerate() {
+                for (j, b) in atoms[..i].iter().enumerate() {
+                    // Geometry-only hints: no bond order, charge/valence model or chemistry mutation.
+                    // Noble gases are deliberately excluded from this visualization heuristic.
+                    if [2, 10, 18, 36, 54, 86, 118].contains(&a.atomic_number)
+                        || [2, 10, 18, 36, 54, 86, 118].contains(&b.atomic_number)
+                    {
+                        continue;
+                    }
+                    let cutoff = 1.2
+                        * (COVALENT_RADII[a.atomic_number as usize]
+                            + COVALENT_RADII[b.atomic_number as usize]);
+                    let distance = a.position.distance(b.position);
+                    if distance > 0.1 && distance <= cutoff {
+                        bonds.push(DisplayBond {
+                            atoms: [j, i],
+                            order: 1,
+                        });
+                    }
                 }
             }
         }

@@ -8,6 +8,16 @@ use std::{
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+pub struct OptimizationResult {
+    pub steps: u32,
+    pub max_force_ev_per_angstrom: f64,
+    pub ase_version: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positions_angstrom: Vec<[f64; 3]>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Calculation {
     pub job_id: String,
     pub input_hash: String,
@@ -19,23 +29,63 @@ pub struct Calculation {
     pub elapsed_seconds: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<CalculationSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optimization: Option<OptimizationResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spin_squared: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<crate::fields::Field>,
 }
 
 impl Calculation {
     pub fn validate(&self, document: &Document) -> Result<(), String> {
         if uuid::Uuid::parse_str(&self.job_id).is_err()
-            || self.input_hash != document.fingerprint()
+            || match &self.optimization {
+                None => self.input_hash != document.fingerprint(),
+                Some(output) => {
+                    output.steps > 50
+                        || !(0.0..0.05).contains(&output.max_force_ev_per_angstrom)
+                        || output.ase_version.is_empty()
+                        || output.ase_version.len() > 64
+                        || !output
+                            .positions_angstrom
+                            .iter()
+                            .copied()
+                            .eq(document.atoms.iter().map(|atom| atom.position_angstrom))
+                }
+            }
             || !self.converged
             || !self.energy_hartree.is_finite()
             || !self.elapsed_seconds.is_finite()
             || self.elapsed_seconds < 0.0
             || self.engine_version.len() > 64
-            || document.spin != 0
+            || match self.spin_squared {
+                Some(value) => {
+                    !matches!(self.method.as_str(), "UHF" | "UKS")
+                        || !value.is_finite()
+                        || value < 0.0
+                }
+                None => document.spin != 0 || matches!(self.method.as_str(), "UHF" | "UKS"),
+            }
+        {
+            return Err("result_invalid".into());
+        }
+        let unique = self.fields.iter().collect::<std::collections::HashSet<_>>();
+        if unique.len() != self.fields.len()
+            || (self.method == crate::settings::SCREENING && !self.fields.is_empty())
         {
             return Err("result_invalid".into());
         }
         if let Some(settings) = &self.settings {
             settings.validate().map_err(|_| "result_invalid")?;
+            if settings.method == crate::settings::SCREENING {
+                settings
+                    .validate_screening_input(document)
+                    .map_err(|_| "result_invalid")?;
+                if self.optimization.is_some() || self.engine_version.trim().is_empty() {
+                    return Err("result_invalid".into());
+                }
+            }
             if settings.method != self.method || settings.basis != self.basis {
                 return Err("result_invalid".into());
             }
@@ -65,10 +115,13 @@ struct SavedProject {
 impl Project {
     pub fn validate(&self) -> Result<(), String> {
         self.settings.validate()?;
-        let doc = self.document.as_ref().ok_or("no_document")?;
-        doc.validate()?;
-        if let Some(result) = &self.calculation {
-            result.validate(doc)?;
+        if let Some(doc) = &self.document {
+            doc.validate()?;
+            if let Some(result) = &self.calculation {
+                result.validate(doc)?;
+            }
+        } else if self.calculation.is_some() {
+            return Err("result_invalid".into());
         }
         Ok(())
     }
@@ -132,6 +185,9 @@ mod tests {
         let doc = Document::from_xyz("2\nH2\nH 0 0 0\nH 0 0 .74", 0, 0).unwrap();
         let mut result = Calculation {
             settings: None,
+            optimization: None,
+            spin_squared: None,
+            fields: Vec::new(),
             job_id: uuid::Uuid::new_v4().to_string(),
             input_hash: doc.fingerprint(),
             method: "RHF".into(),
@@ -162,7 +218,9 @@ mod tests {
         };
         project.save(&path).unwrap();
         assert_eq!(Project::load(&path).unwrap(), project);
-        assert!(Project::default().save(&path).is_err());
+        let mut invalid = project.clone();
+        invalid.document.as_mut().unwrap().atoms.clear();
+        assert!(invalid.save(&path).is_err());
         assert_eq!(Project::load(&path).unwrap(), project);
         fs::write(&path, b"{broken").unwrap();
         assert!(Project::load(&path).is_err());

@@ -87,6 +87,7 @@ pub struct Selection {
     pub symbol: String,
     pub position: [f64; 3],
     pub inferred_neighbors: usize,
+    pub bonds: Vec<(usize, u8)>,
 }
 
 pub struct Renderer {
@@ -102,6 +103,9 @@ pub struct Renderer {
     document_revision: Option<u64>,
     client: String,
     frames: u64,
+    field_ticket: u64,
+    field: Option<(u64, String, crate::fields::Surface)>,
+    molecule_radius: f32,
 }
 impl Default for Renderer {
     fn default() -> Self {
@@ -117,6 +121,9 @@ impl Default for Renderer {
             document_revision: None,
             client: String::new(),
             frames: 0,
+            field_ticket: 0,
+            field: None,
+            molecule_radius: 0.0,
         }
     }
 }
@@ -124,12 +131,31 @@ impl Renderer {
     fn sync_scene(&mut self, document: Option<&Document>, revision: u64) {
         if self.document_revision != Some(revision) {
             self.scene = Scene::from_document(document);
+            self.molecule_radius = self.scene.radius;
             self.camera = Camera::default();
             self.selected = None;
             self.bond_analysis = None;
             self.document_revision = Some(revision);
         }
     }
+    pub(crate) fn begin_field(&mut self) -> u64 {
+        self.field_ticket += 1;
+        self.field = None;
+        self.field_ticket
+    }
+
+    pub(crate) fn finish_field(
+        &mut self,
+        ticket: u64,
+        revision: u64,
+        job_id: String,
+        surface: crate::fields::Surface,
+    ) {
+        if self.field_ticket == ticket {
+            self.field = Some((revision, job_id, surface));
+        }
+    }
+
     /// CPU-only update under AppState; native/GPU work remains on the main thread.
     pub(crate) fn apply_bond_analysis(
         &mut self,
@@ -141,10 +167,64 @@ impl Renderer {
     ) -> Result<(), String> {
         self.sync_scene(Some(document), revision);
         let replacement = bonds.unwrap_or_else(|| Scene::from_document(Some(document)).bonds);
-        self.scene.set_bonds(replacement)?;
+        if document.bonds.is_none() {
+            self.scene.set_bonds(replacement)?;
+        }
         self.bond_analysis = Some((status, version));
         Ok(())
     }
+    pub(crate) fn editor_bonds(
+        &mut self,
+        document: &Document,
+        revision: u64,
+    ) -> Vec<crate::document::Bond> {
+        self.sync_scene(Some(document), revision);
+        self.scene
+            .bonds
+            .iter()
+            .map(|bond| {
+                let mut atoms = bond.atoms;
+                atoms.sort_unstable();
+                crate::document::Bond {
+                    atoms,
+                    order: bond.order,
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn editor_drag(
+        &self,
+        revision: u64,
+        aspect: f32,
+        start: [f32; 2],
+        end: [f32; 2],
+    ) -> Result<(usize, [f64; 3]), String> {
+        if self.document_revision != Some(revision)
+            || !aspect.is_finite()
+            || !(0.001..=1000.0).contains(&aspect)
+            || start
+                .into_iter()
+                .chain(end)
+                .any(|v| !(0.0..=1.0).contains(&v))
+        {
+            return Err("atom_edit".into());
+        }
+        let index = self
+            .scene
+            .pick(&self.camera, aspect, start[0], start[1])
+            .ok_or("atom_edit")?;
+        let local = self.scene.atoms[index].position - self.scene.center;
+        let matrix = self.camera.matrix(self.scene.radius, aspect);
+        let depth = matrix.project_point3(local).z;
+        let inverse = matrix.inverse();
+        let point = |[x, y]: [f32; 2]| {
+            inverse.project_point3(glam::Vec3::new(2.0 * x - 1.0, 1.0 - 2.0 * y, depth))
+        };
+        let delta = (point(end) - point(start)).to_array().map(f64::from);
+        Ok((index, delta))
+    }
+
     pub fn ready(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
@@ -175,6 +255,7 @@ impl Renderer {
         request: ViewportRequest,
         document: Option<&Document>,
         revision: u64,
+        job_id: Option<&str>,
     ) -> Result<ViewportSnapshot, String> {
         request.bounds.validate()?;
         if request.client.len() > 100 || request.actions.len() > 128 {
@@ -190,6 +271,19 @@ impl Renderer {
             self.context = Some(pollster::block_on(GpuContext::initialize())?);
         }
         self.sync_scene(document, revision);
+        if self
+            .field
+            .as_ref()
+            .is_some_and(|(source_revision, source_job, _)| {
+                *source_revision != revision || Some(source_job.as_str()) != job_id
+            })
+        {
+            self.field = None;
+        }
+        let surface = self.field.as_ref().map(|(_, _, mesh)| mesh);
+        self.scene.radius = surface.map_or(self.molecule_radius, |mesh| {
+            self.molecule_radius.max(mesh.radius * 1.12)
+        });
         let gpu = self.context.as_ref().unwrap();
         if self.viewport.is_none() {
             self.viewport = Some(native::Viewport::new(gpu, webview)?);
@@ -235,6 +329,7 @@ impl Renderer {
             &self.camera,
             self.selected,
             self.show_bonds,
+            surface.map(|mesh| (self.field_ticket, mesh)),
         )?;
         if rendered {
             self.frames += 1;
@@ -244,6 +339,21 @@ impl Renderer {
                 index: index + 1,
                 symbol: self.scene.symbol(index).into(),
                 position: doc.atoms[index].position_angstrom,
+                bonds: self
+                    .scene
+                    .bonds
+                    .iter()
+                    .filter_map(|bond| {
+                        let [a, b] = bond.atoms;
+                        if index == a {
+                            Some((b + 1, bond.order))
+                        } else if index == b {
+                            Some((a + 1, bond.order))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
                 inferred_neighbors: self
                     .scene
                     .bonds
@@ -258,7 +368,9 @@ impl Renderer {
             selected,
             show_bonds: self.show_bonds,
             bond_count: self.scene.bonds.len(),
-            bond_source: if self
+            bond_source: if document.is_some_and(|doc| doc.bonds.is_some()) {
+                "manual"
+            } else if self
                 .bond_analysis
                 .as_ref()
                 .is_some_and(|(status, _)| status == "inferred")
@@ -288,6 +400,24 @@ impl Renderer {
 #[cfg(test)]
 mod bond_tests {
     use super::*;
+    #[test]
+    fn drag_unprojects_on_the_atom_depth_and_checks_revision() {
+        let doc = Document::from_xyz("1\nH\nH 0 0 0", 0, 1).unwrap();
+        let mut renderer = Renderer::default();
+        renderer.sync_scene(Some(&doc), 5);
+        let (index, delta) = renderer
+            .editor_drag(5, 2.0, [0.5, 0.5], [0.6, 0.4])
+            .unwrap();
+        assert_eq!(index, 0);
+        let matrix = renderer.camera.matrix(renderer.scene.radius, 2.0);
+        let target = matrix.project_point3(glam::Vec3::from_array(delta.map(|v| v as f32)));
+        assert!((target.x - 0.2).abs() < 1e-4 && (target.y - 0.2).abs() < 1e-4);
+        assert!((target.z - matrix.project_point3(glam::Vec3::ZERO).z).abs() < 1e-4);
+        assert!(renderer
+            .editor_drag(4, 2.0, [0.5, 0.5], [0.6, 0.4])
+            .is_err());
+    }
+
     #[test]
     fn assignment_replaces_hints_without_resetting_view_and_clears_on_revision() {
         let doc = Document::from_xyz("3\nCO2\nO -1.16 0 0\nC 0 0 0\nO 1.16 0 0", 0, 0).unwrap();

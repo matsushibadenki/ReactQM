@@ -2,7 +2,7 @@ import type { Settings } from './CalculationControls';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-export type QueueItem = { settings?: Settings; sequence: number; id: string; name: string; formula: string; status: string };
+export type QueueItem = { optimize?: boolean; multiplicity?: number | null; settings?: Settings; sequence: number; id: string; name: string; formula: string; status: string };
 export type QueuePage = { paused: boolean; waiting: number; active: QueueItem | null; items: QueueItem[]; nextCursor: number | null };
 export function useQueue() {
   const [queue, setQueue] = useState<QueuePage>({ paused: true, waiting: 0, active: null, items: [], nextCursor: null });

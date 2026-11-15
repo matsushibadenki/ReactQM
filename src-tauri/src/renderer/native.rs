@@ -1,5 +1,5 @@
 use super::{
-    gpu::{GpuContext, RenderCore, Targets, ViewRegion},
+    gpu::{GpuContext, RenderCore, SurfaceMeshes, Targets, ViewRegion},
     scene::{Camera, Scene},
     Bounds,
 };
@@ -25,6 +25,7 @@ pub struct Viewport {
     core: RenderCore,
     config: wgpu::SurfaceConfiguration,
     targets: Option<Targets>,
+    field: Option<(u64, SurfaceMeshes)>,
 }
 fn rect(x: f64, y: f64, w: f64, h: f64) -> CGRect {
     CGRect::new(CGPoint::new(x, y), CGSize::new(w, h))
@@ -72,6 +73,7 @@ impl Viewport {
             core,
             config,
             targets: None,
+            field: None,
         })
     }
     pub fn pixel_size(&self) -> [u32; 2] {
@@ -87,6 +89,7 @@ impl Viewport {
         camera: &Camera,
         selected: Option<usize>,
         show_bonds: bool,
+        field: Option<(u64, &crate::fields::Surface)>,
     ) -> Result<bool, String> {
         let mtm = MainThreadMarker::new().ok_or("viewport_thread")?;
         let view = unsafe { &*webview.cast::<NSView>() };
@@ -160,11 +163,25 @@ impl Viewport {
                 return Err(error.to_string());
             }
         };
-        let binding = self.core.upload(
-            gpu,
-            &scene.instances_for_camera(selected, show_bonds, camera, (b.width / b.height) as f32),
-        );
-        self.core.draw(
+        if let Some((ticket, surface)) = field {
+            if self
+                .field
+                .as_ref()
+                .is_none_or(|(previous, _)| *previous != ticket)
+            {
+                self.field = Some((ticket, SurfaceMeshes::upload(gpu, surface)));
+            }
+        } else {
+            self.field = None;
+        }
+        let mut instances =
+            scene.instances_for_camera(selected, show_bonds, camera, (b.width / b.height) as f32);
+        let surface = self.field.as_ref().map(|(_, meshes)| meshes);
+        if let Some(surface) = surface {
+            instances.extend(surface.instances());
+        }
+        let binding = self.core.upload(gpu, &instances);
+        self.core.draw_with_surface(
             gpu,
             &frame.texture.create_view(&Default::default()),
             self.targets.as_ref().unwrap(),
@@ -182,6 +199,7 @@ impl Viewport {
                     ((bottom - y) / b.height) as f32,
                 ],
             }),
+            surface,
         );
         frame.present();
         Ok(true)

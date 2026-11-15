@@ -18,6 +18,15 @@ pub struct Document {
     pub spin: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<StructureSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bonds: Option<Vec<Bond>>, // None uses perception; Some(empty) explicitly has no bonds.
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Bond {
+    pub atoms: [usize; 2],
+    pub order: u8,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -96,11 +105,7 @@ impl Document {
             if fields.len() != 4 {
                 return Err("xyz_row".into());
             }
-            let atomic_number = SYMBOLS
-                .split_whitespace()
-                .position(|s| s == fields[0])
-                .ok_or("element")? as u8
-                + 1;
+            let atomic_number = Self::atomic_number(fields[0])?;
             let mut position_angstrom = [0.0; 3];
             for i in 0..3 {
                 position_angstrom[i] = fields[i + 1].parse().map_err(|_| "coordinate")?;
@@ -121,6 +126,7 @@ impl Document {
             charge,
             spin,
             source: None,
+            bonds: None,
         };
         document.validate()?;
         Ok(document)
@@ -167,11 +173,33 @@ impl Document {
                 }
             }
         }
+        if let Some(bonds) = &self.bonds {
+            let mut previous = None;
+            for bond in bonds {
+                let [a, b] = bond.atoms;
+                if a >= b
+                    || b >= self.atoms.len()
+                    || !(1..=3).contains(&bond.order)
+                    || previous.is_some_and(|pair| pair >= bond.atoms)
+                {
+                    return Err("bond_edit".into());
+                }
+                previous = Some(bond.atoms);
+            }
+        }
         let spin = i64::from(self.spin);
         if electrons <= 0 || spin > electrons || (electrons - spin) % 2 != 0 {
             return Err("electron_spin".into());
         }
         Ok(())
+    }
+
+    pub fn atomic_number(symbol: &str) -> Result<u8, String> {
+        SYMBOLS
+            .split_whitespace()
+            .position(|value| value.eq_ignore_ascii_case(symbol.trim()))
+            .map(|index| index as u8 + 1)
+            .ok_or_else(|| "element".into())
     }
 
     pub fn fingerprint(&self) -> String {

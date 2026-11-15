@@ -166,6 +166,16 @@ pub(crate) fn worker_response(
     operation: &str,
     bytes: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
+    worker_response_bounded(config, stopping, timeout, operation, bytes, 65536)
+}
+pub(crate) fn worker_response_bounded(
+    config: &WorkerConfig,
+    stopping: &AtomicBool,
+    timeout: Duration,
+    operation: &str,
+    bytes: Vec<u8>,
+    output_limit: usize,
+) -> Result<Vec<u8>, String> {
     if !config.python.is_file() {
         return Err("worker_missing".into());
     }
@@ -193,7 +203,10 @@ pub(crate) fn worker_response(
     let writer = std::thread::spawn(move || input.write_all(&bytes));
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        output.take(65537).read_to_end(&mut bytes).map(|_| bytes)
+        output
+            .take(output_limit as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
     });
     let started = Instant::now();
     let exit = loop {
@@ -226,7 +239,7 @@ pub(crate) fn worker_response(
     let bytes = read
         .map_err(|_| "valence_protocol")?
         .map_err(|_| "valence_protocol")?;
-    if bytes.len() > 65536 {
+    if bytes.len() > output_limit {
         return Err("valence_protocol".into());
     }
     Ok(bytes)

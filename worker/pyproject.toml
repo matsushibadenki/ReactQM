@@ -18,3 +18,8 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 reactqm-worker = "reactqm_worker.__main__:main"
+
+[project.optional-dependencies]
+screening = [
+    "tblite==0.8.0",
+]

@@ -16,6 +16,11 @@ def doctor() -> dict:
     for package, module in PACKAGES.items():
         importlib.import_module(module)
         versions[package] = importlib.metadata.version(package)
+    try:
+        from tblite.library import get_version
+        versions["tblite"] = ".".join(map(str, get_version()))
+    except (ImportError, OSError):
+        versions["tblite"] = None
     return {"status": "ok", "packages": versions, "sqlite": sqlite3.sqlite_version}
 
 
@@ -60,9 +65,21 @@ def smoke() -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ReactQM worker diagnostics")
-    parser.add_argument("command", choices=["doctor", "smoke", "calculate", "valence", "structure"])
+    parser.add_argument("command", choices=["doctor", "smoke", "calculate", "valence", "structure", "optimize", "field"])
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--input", type=Path)
+    parser.add_argument("--fmax", type=float, default=0.05)
+    parser.add_argument("--steps", type=int, default=50)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
+    if args.command == "optimize":
+        if args.input is None or args.output_dir is None:
+            parser.error("optimize requires --input and --output-dir")
+        from .optimization import run_cli
+        raise SystemExit(run_cli(args.input, args.output_dir, args.fmax, args.steps, args.resume))
+    if args.command == "field":
+        from .fields import serve
+        raise SystemExit(serve())
     if args.command == "structure":
         from .structure import serve
         raise SystemExit(serve())

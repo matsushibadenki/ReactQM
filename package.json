@@ -21,7 +21,9 @@
     "test:structure-import": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example structure_import_probe",
     "test:window-geometry": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example window_geometry_probe",
     "test:bond-render": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example bond_render_probe",
-    "test:settings": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example settings_probe"
+    "test:settings": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example settings_probe",
+    "test:fields": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example bond_render_probe -- --fields",
+    "test:screening": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example settings_probe -- --screening"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

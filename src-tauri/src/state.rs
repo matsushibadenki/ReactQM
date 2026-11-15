@@ -63,6 +63,7 @@ pub struct WorkspaceSnapshot {
     pub document_revision: u64,
     pub locale: Locale,
     pub atom_count: usize,
+    pub manual_bonds: bool,
     pub name: String,
     pub formula: String,
     pub charge: i32,
@@ -162,6 +163,7 @@ impl Workspace {
                     engine_version: s.engine_version.clone(),
                     input_hash: s.input_hash.clone(),
                 }),
+            manual_bonds: doc.is_some_and(|doc| doc.bonds.is_some()),
             atom_count: doc.map_or(0, |doc| doc.atoms.len()),
             name: doc.map_or_else(String::new, |doc| doc.name.clone()),
             formula: doc.map_or_else(String::new, |doc| doc.formula()),
@@ -170,10 +172,17 @@ impl Workspace {
             renderer_ready: self.renderer.ready(),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
-            dirty: self.project.document.is_some()
-                && self.saved_project.as_ref() != Some(&self.project),
+            dirty: self
+                .saved_project
+                .as_ref()
+                .map_or(doc.is_some(), |saved| saved != &self.project),
             has_saved: self.saved_available,
-            calculation: self.project.calculation.clone(),
+            calculation: self.project.calculation.clone().map(|mut result| {
+                if let Some(optimization) = &mut result.optimization {
+                    optimization.positions_angstrom.clear();
+                }
+                result
+            }),
             job: self.job.clone(),
             busy: self.active_job.is_some(),
         }
@@ -228,6 +237,9 @@ mod tests {
         let document = state.project.document.clone().unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         let calculation = Calculation {
+            optimization: None,
+            spin_squared: None,
+            fields: Vec::new(),
             settings: None,
             job_id: id.clone(),
             input_hash: document.fingerprint(),
