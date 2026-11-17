@@ -4,13 +4,13 @@ Tauri 2 / Rustを中核に、React UI、Rust / wgpu描画、独立Python Worker�
 
 現在は **XYZ入力 → wgpuの分子3D表示 → 閉殻・開殻HF／DFTの実計算 → 結果表示 → 保存／再読込** がmacOSで動作します。計算履歴はSQLiteへ自動記録し、再起動後も検証して復元できます。永続待機キューで複数の計算を順に実行できます。結果・履歴パネルはドック／独立表示と配置保存に対応しました。独立窓の位置・サイズ復元と画面外回収を実装済みです。SDF／SMILES入力と初期3D構造生成に対応しています。3Dビューで原子と結合を編集できます。
 
-![ReactQMのmacOS実画面：H₂の3D表示とRHF/STO-3Gの収束結果](docs/images/reactqm-macos-h2.jpg)
+![ReactQMのmacOS実画面。水分子の3D表示と収束済みのRHF / STO-3G計算結果](docs/images/reactqm-macos-h2o.png)
 
-macOS実画面（2026-11-06）。wgpu / MetalによるH₂の球棒表示と、PySCF RHF/STO-3Gの収束結果です。
+macOS実画面（2026-11-17）。wgpuで描画した水分子と、待機列から実行したPySCF RHF / STO-3Gの収束結果です。全エネルギーは −74.9458851008 Eh でした。
 
-English: Native macOS app showing H₂ in 3D and a converged RHF/STO-3G calculation.
+English: ReactQM on macOS showing the 3D water molecule and a converged PySCF RHF / STO-3G calculation run through the queue.
 
-简体中文：macOS原生应用，展示H₂的3D球棍模型及已收敛的RHF/STO-3G计算结果。
+简体中文：ReactQM 的 macOS 实际界面，展示水分子的三维模型与通过队列运行并已收敛的 PySCF RHF / STO-3G 计算结果。
 
 - [ロードマップ](ROADMAP.md)
 - [アーキテクチャ・科学計算の境界](docs/ARCHITECTURE.md)
