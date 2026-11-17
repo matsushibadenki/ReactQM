@@ -35,13 +35,66 @@ pub struct Calculation {
     pub spin_squared: Option<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<crate::fields::Field>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neb: Option<crate::neb::NebResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<crate::transition::TransitionResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermochemistry: Option<crate::thermochemistry::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refinement: Option<crate::refinement::Report>,
 }
 
 impl Calculation {
     pub fn validate(&self, document: &Document) -> Result<(), String> {
+        if let Some(report) = &self.refinement {
+            if self.optimization.is_some()
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.method != "RHF"
+                || !self.fields.is_empty()
+                || self.spin_squared.is_some()
+            {
+                return Err("result_invalid".into());
+            }
+            report.validate(document, self.energy_hartree)?;
+        }
+        if let Some(report) = &self.thermochemistry {
+            if self.optimization.is_some()
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || !self.fields.is_empty()
+                || self.method == crate::settings::SCREENING
+            {
+                return Err("result_invalid".into());
+            }
+            report.validate(document, self.energy_hartree)?;
+        }
+        if let Some(path) = &self.transition {
+            path.validate(document)?;
+            if self.neb.is_some()
+                || self.optimization.is_some()
+                || !self.fields.is_empty()
+                || self.method == crate::settings::SCREENING
+            {
+                return Err("result_invalid".into());
+            }
+        }
+        if let Some(path) = &self.neb {
+            path.validate(document, true)?;
+            if self.optimization.is_some()
+                || !self.fields.is_empty()
+                || self.spin_squared.is_some()
+                || self.method == crate::settings::SCREENING
+                || self.energy_hartree != path.images[0].energy_hartree
+            {
+                return Err("result_invalid".into());
+            }
+        }
         if uuid::Uuid::parse_str(&self.job_id).is_err()
             || match &self.optimization {
-                None => self.input_hash != document.fingerprint(),
+                None => self.transition.is_none() && self.input_hash != document.fingerprint(),
                 Some(output) => {
                     output.steps > 50
                         || !(0.0..0.05).contains(&output.max_force_ev_per_angstrom)
@@ -65,7 +118,10 @@ impl Calculation {
                         || !value.is_finite()
                         || value < 0.0
                 }
-                None => document.spin != 0 || matches!(self.method.as_str(), "UHF" | "UKS"),
+                None => {
+                    self.neb.is_none()
+                        && (document.spin != 0 || matches!(self.method.as_str(), "UHF" | "UKS"))
+                }
             }
         {
             return Err("result_invalid".into());
@@ -188,6 +244,10 @@ mod tests {
             optimization: None,
             spin_squared: None,
             fields: Vec::new(),
+            neb: None,
+            transition: None,
+            thermochemistry: None,
+            refinement: None,
             job_id: uuid::Uuid::new_v4().to_string(),
             input_hash: doc.fingerprint(),
             method: "RHF".into(),

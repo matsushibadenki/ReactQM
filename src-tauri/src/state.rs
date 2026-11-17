@@ -1,4 +1,5 @@
 use crate::{
+    document::Document,
     layout::PanelLayout,
     project::{Calculation, Project},
     renderer::Renderer,
@@ -37,6 +38,7 @@ pub struct ActiveJob {
 
 #[derive(Default)]
 pub struct Workspace {
+    pub neb_image: Option<(u64, String, Document)>,
     pub project: Project,
     pub renderer: Renderer,
     pub layout: PanelLayout,
@@ -181,6 +183,12 @@ impl Workspace {
                 if let Some(optimization) = &mut result.optimization {
                     optimization.positions_angstrom.clear();
                 }
+                if let Some(path) = &mut result.neb {
+                    path.positions.clear();
+                }
+                if let Some(path) = &mut result.transition {
+                    path.positions_angstrom.clear();
+                }
                 result
             }),
             job: self.job.clone(),
@@ -240,6 +248,10 @@ mod tests {
             optimization: None,
             spin_squared: None,
             fields: Vec::new(),
+            neb: None,
+            transition: None,
+            thermochemistry: None,
+            refinement: None,
             settings: None,
             job_id: id.clone(),
             input_hash: document.fingerprint(),

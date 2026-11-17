@@ -1,3 +1,6 @@
+import { RefinementComparison, RefinementQueue, refinementName, type RefinementReport } from './Refinement';
+import { Thermochemistry, ThermalQueue, type ThermalReport } from './Thermochemistry';
+import { ReactionEndpoints } from './ReactionEndpoints';
 import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -13,7 +16,11 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useLayout, type PanelId } from './useLayout';
 import { DockWorkspace, FloatingPanel, LayoutTools, panelTitle } from './DockWorkspace';
 
-type Calculation = FieldResult & { input_hash: string; basis: string; energy_hartree: number; engine_version: string; elapsed_seconds: number; converged: boolean; settings?: Settings; spin_squared?: number; optimization?: { steps: number; max_force_ev_per_angstrom: number; ase_version: string } };
+type Transition = {
+  source_job: string; seed_image: number; sella_version: string; steps: number; imaginary_count: number; frequencies_cm1: number[];
+  branches: { converged: boolean; match: 'reactant' | 'product' | null; reactant_rmsd_angstrom: number; product_rmsd_angstrom: number; max_force_ev_per_angstrom: number; steps: number }[];
+};
+type Calculation = FieldResult & { input_hash: string; basis: string; energy_hartree: number; engine_version: string; elapsed_seconds: number; converged: boolean; settings?: Settings; transition?: Transition; thermochemistry?: ThermalReport; refinement?: RefinementReport; spin_squared?: number; optimization?: { steps: number; max_force_ev_per_angstrom: number; ase_version: string } };
 type JobStatus = 'running' | 'cancelling' | 'succeeded' | 'cancelled' | 'failed' | 'timed_out' | 'interrupted' | 'corrupt';
 type InputFormat = 'xyz' | 'smiles' | 'sdf';
 type StructureSource = { format: string; method: 'etkdgv3' | 'sdf_3d'; seed: number | null; engineVersion: string; inputHash: string };
@@ -35,6 +42,24 @@ const paths = {
 };
 function Icon({ name }: { name: keyof typeof paths }) { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d={paths[name]} /></svg>; }
 function Info({ text }: { text: string }) { return <button type="button" className="info" aria-label={text}>ⓘ<span role="tooltip">{text}</span></button>; }
+
+function TransitionDetails({ result, locale }: { result: Transition; locale: Locale }) {
+  const t = messages[locale];
+  const matches = new Set(result.branches.map(branch => branch.match));
+  const confirmed = result.imaginary_count === 1 && matches.has('reactant') && matches.has('product');
+  return <section className="transition-result">
+    <strong>{t.transitionJob} · Sella {result.sella_version}</strong>
+    <p role="status">{confirmed ? t.transitionConfirmed : t.transitionUnconfirmed}</p>
+    <p>{t.nebImage} {result.seed_image + 1} · {t.imaginaryModes} {result.imaginary_count}</p>
+    <p>{t.frequencies} (cm⁻¹) · {result.frequencies_cm1.map(value => value.toFixed(1)).join(' / ')}</p>
+    {result.branches.map((branch, i) => <div key={i}>
+      <strong>{i === 0 ? t.ircForward : t.ircReverse}</strong>
+      <span> · {branch.match ? t[branch.match] : branch.converged ? t.ircUnmatched : t.ircNotConverged}</span>
+      <small>RMSD · {t.reactant} {branch.reactant_rmsd_angstrom.toFixed(3)} Å · {t.product} {branch.product_rmsd_angstrom.toFixed(3)} Å</small>
+    </div>)}
+    <details><summary>{t.provenance}</summary><code>CI-NEB {result.source_job}</code></details>
+  </section>;
+}
 
 function App() {
   // Only drafts and a read-only projection live here; Rust owns the project/history/job.
@@ -100,7 +125,7 @@ function App() {
 
   const moleculePanel = (      <section aria-labelledby="molecule-title">
         <div className="heading"><h2 id="molecule-title">{t.molecule}</h2>{snapshot.dirty ? <span className="dirty" aria-label={t.unsaved} title={t.unsaved}>●</span> : null}</div>
-        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} manualBonds={snapshot.manualBonds} result={result} editingDisabled={locked} onEdit={edit => void command('edit_molecule', { edit })} />
+        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} manualBonds={snapshot.manualBonds} result={result?.transition || result?.thermochemistry || result?.refinement ? null : result} editingDisabled={locked} onEdit={edit => void command('edit_molecule', { edit })} />
         <div className="molecule-summary"><strong className="formula">{snapshot.formula || '—'}</strong><span>{snapshot.atomCount ? snapshot.name || t.untitled : t.empty}</span></div>
         <dl className="metrics"><div><dt>{t.atoms}</dt><dd>{snapshot.atomCount}</dd></div><div><dt>{t.charge} <Info text={t.chargeHelp} /></dt><dd>{snapshot.charge === 0 ? `0 · ${t.neutral}` : snapshot.charge > 0 ? `+${snapshot.charge}` : `−${Math.abs(snapshot.charge)}`}</dd></div><div><dt>{t.spin} <Info text={t.spinHelp} /></dt><dd>{snapshot.atomCount ? snapshot.spin + 1 : '—'}</dd></div></dl>
         {snapshot.atomCount ? <form key={snapshot.documentRevision} className="input-row multiplicity-editor" onSubmit={event => {
@@ -114,6 +139,7 @@ function App() {
           <textarea id="xyz" aria-label={t.draft} spellCheck={false} value={draft} disabled={locked} maxLength={16_384} placeholder={format === 'smiles' ? 'CCO' : format === 'sdf' ? t.sdfPlaceholder : '2\nH₂\nH 0 0 0\nH 0 0 0.74'} onChange={event => setDraft(event.target.value)} />
           <div className="input-row">{format === 'xyz' ? <><label><span>{t.charge}</span><input type="number" step="1" value={charge} disabled={locked} onChange={event => setCharge(event.target.value)} /></label><label>{t.spin}<input type="number" min="1" step="1" value={multiplicity} disabled={locked} onChange={event => setMultiplicity(event.target.value)} /></label></> : <label>{t.seed}<input type="number" min="0" max="2147483647" step="1" value={seed} disabled={locked} onChange={event => setSeed(event.target.value)} /></label>}<button type="submit" disabled={locked || !draft.trim()}>{t.apply}</button></div>
         </form></details>
+        <ReactionEndpoints locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} locked={locked} />
       </section>);
   const panels = {
     result: <><div className="result-help"><Info text={(result?.method ?? snapshot.settings?.method) === 'GFN2-xTB' ? t.screeningHelp : t.calculationHelp} /></div>        <CalculationControls settings={snapshot.settings ?? defaultSettings} locale={snapshot.locale} spin={snapshot.spin} disabled={locked} onChange={settings => void command('set_calculation_settings', { settings })} />
@@ -121,9 +147,16 @@ function App() {
           <span className="job-status" role="status">{result ? t.succeeded : t.noResult}</span>
         </div>
         {result ? <div className="result">
+          {result.transition ? <TransitionDetails result={result.transition} locale={snapshot.locale} /> : null}
+          {result.transition?.imaginary_count === 1 && result.transition.branches.some(branch => branch.match === 'reactant') && result.transition.branches.some(branch => branch.match === 'product') ?
+            <ThermalQueue key={result.job_id} locale={snapshot.locale} disabled={locked} onQueue={conditions => void command('start_thermochemistry', { id: result.job_id, ...conditions })} /> : null}
+          {snapshot.spin === 0 && snapshot.atomCount <= 10 && result.transition?.imaginary_count === 1 && result.transition.branches.some(branch => branch.match === 'reactant') && result.transition.branches.some(branch => branch.match === 'product') ?
+            <RefinementQueue key={result.job_id} locale={snapshot.locale} disabled={locked} queue={(method, basis) => void command('start_refinement', { id: result.job_id, method, basis })} /> : null}
+          {result.refinement ? <RefinementComparison report={result.refinement} basis={result.basis} locale={snapshot.locale} /> : null}
+          {result.thermochemistry ? <Thermochemistry report={result.thermochemistry} locale={snapshot.locale} /> : null}
           {result.optimization ? <p className="job-status">{t.optimizeStructure} · ASE BFGS {result.optimization.ase_version} · {t.optimizationStep} {result.optimization.steps} · {t.maximumForce} {result.optimization.max_force_ev_per_angstrom.toPrecision(3)} eV/Å</p> : null}
-          <div className="method">{result.settings ? conditionLabel(result.settings) : `${result.method} / ${result.basis.toUpperCase()}`}</div>
-          <span className="eyebrow">{t.energy}</span><div className="energy"><output>{result.energy_hartree.toFixed(10)}</output><span>Eh</span></div>
+          <div className="method">{result.refinement ? `${refinementName(result.refinement.method)} / ${result.basis.toUpperCase()}` : result.settings ? conditionLabel(result.settings) : `${result.method} / ${result.basis.toUpperCase()}`}</div>
+          <span className="eyebrow">{result.neb ? `${t.reactant} · ${t.energy}` : t.energy}</span><div className="energy"><output>{result.energy_hartree.toFixed(10)}</output><span>Eh</span></div>
           <dl>{result.spin_squared !== undefined ? <div><dt>⟨S²⟩ <Info text={t.spinSquaredHelp} /></dt><dd>{result.spin_squared.toFixed(4)} / {(snapshot.spin * (snapshot.spin + 2) / 4).toFixed(4)}</dd></div> : null}<div><dt>{t.engine}</dt><dd>{result.method === 'GFN2-xTB' ? 'tblite' : 'PySCF'} {result.engine_version}</dd></div><div><dt>{t.elapsed}</dt><dd>{result.elapsed_seconds.toFixed(2)} s</dd></div></dl>
           <details><summary>{t.provenance}</summary><code>{result.job_id}</code><code>SHA-256 {result.input_hash}</code>{result.method === 'GFN2-xTB' ? <code>SCC ≤ 250 · {t.screeningAccuracy} 1.0 · 300 K</code> : result.settings ? <code>SCF ≤ {result.settings.max_cycle} · {result.settings.conv_tol.toExponential()} Eh{result.settings.grid_level ? ` · Grid ${result.settings.grid_level}` : ''}</code> : null}</details>
         </div> : null}

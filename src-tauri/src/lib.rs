@@ -1,16 +1,23 @@
+pub mod barriers;
 pub mod catalog;
 pub mod document;
 mod editor;
 pub mod fields;
 pub mod jobs;
 pub mod layout;
+pub mod neb;
 pub mod panel_windows;
 pub mod project;
+pub mod rates;
+mod reaction;
+pub mod refinement;
 pub mod renderer;
 pub mod scheduler;
 pub mod settings;
 pub mod state;
 pub mod structure;
+pub mod thermochemistry;
+pub mod transition;
 pub mod valence;
 pub mod window_geometry;
 
@@ -220,6 +227,83 @@ fn start_calculation(
 }
 
 #[tauri::command]
+async fn start_transition(
+    app: tauri::AppHandle,
+    id: String,
+    expected_revision: u64,
+) -> Result<WorkspaceSnapshot, String> {
+    queue_verified_job(app, expected_revision, move |store| {
+        transition::from_path(store, &id, expected_revision)
+    })
+    .await
+}
+
+async fn queue_verified_job(
+    app: tauri::AppHandle,
+    expected_revision: u64,
+    create: impl FnOnce(&Catalog) -> Result<JobRequest, String> + Send + 'static,
+) -> Result<WorkspaceSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = create(app.state::<CatalogState>().get()?)?;
+        let runner = app.state::<Scheduler>();
+        let gate = runner.gate.lock().map_err(|_| "storage")?;
+        if gate.stopping {
+            return Err("queue_stopping".into());
+        }
+        let snapshot = {
+            let state = app.state::<AppState>();
+            let mut workspace = state.0.lock().map_err(|_| "storage")?;
+            check_revision(&workspace, expected_revision)?;
+            app.state::<CatalogState>().get()?.enqueue(&source, None)?;
+            workspace.revision += 1;
+            workspace.snapshot()
+        };
+        drop(gate);
+        runner.wake();
+        let _ = app.emit("job-history-changed", ());
+        publish(&app, snapshot)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn start_thermochemistry(
+    app: tauri::AppHandle,
+    id: String,
+    expected_revision: u64,
+    temperature_kelvin: f64,
+    standard_state: thermochemistry::StandardState,
+    solvent: Option<thermochemistry::Solvent>,
+) -> Result<WorkspaceSnapshot, String> {
+    queue_verified_job(app, expected_revision, move |store| {
+        thermochemistry::from_transition(
+            store,
+            &id,
+            expected_revision,
+            temperature_kelvin,
+            standard_state,
+            solvent,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+async fn start_refinement(
+    app: tauri::AppHandle,
+    id: String,
+    expected_revision: u64,
+    method: refinement::Method,
+    basis: String,
+) -> Result<WorkspaceSnapshot, String> {
+    queue_verified_job(app, expected_revision, move |store| {
+        refinement::from_transition(store, &id, expected_revision, method, basis)
+    })
+    .await
+}
+
+#[tauri::command]
 fn start_optimization(
     app: tauri::AppHandle,
     expected_revision: u64,
@@ -292,8 +376,12 @@ fn launch_calculation(
             let hash = document.fingerprint();
             hash == request.input_hash || resume_input.as_ref() == Some(&hash)
         });
-        if !request.optimize
-            || (matching_input && workspace.project.settings == request.effective_settings())
+        if request.refinement.is_none()
+            && request.thermochemistry.is_none()
+            && request.transition.is_none()
+            && request.neb.is_none()
+            && (!request.optimize
+                || (matching_input && workspace.project.settings == request.effective_settings()))
         {
             workspace
                 .result_targets
@@ -419,12 +507,26 @@ async fn update_viewport(
                         renderer,
                         project,
                         document_revision,
+                        neb_image,
                         ..
                     } = &mut *workspace;
+                    let job = project
+                        .calculation
+                        .as_ref()
+                        .map(|result| result.job_id.as_str());
+                    if neb_image.as_ref().is_some_and(|(revision, source, _)| {
+                        *revision != *document_revision || Some(source.as_str()) != job
+                    }) {
+                        *neb_image = None;
+                        renderer.invalidate_scene();
+                    }
                     renderer.update(
                         webview.inner().cast(),
                         request,
-                        project.document.as_ref(),
+                        neb_image
+                            .as_ref()
+                            .map(|(_, _, document)| document)
+                            .or(project.document.as_ref()),
                         *document_revision,
                         project
                             .calculation
@@ -498,6 +600,7 @@ pub fn native_context() -> tauri::Context<tauri::Wry> {
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(reaction::ReactionService::default())
         .manage(valence::ValenceService::default())
         .manage(structure::StructureService::default())
         .manage(Scheduler::default())
@@ -518,6 +621,16 @@ pub fn run() {
             update_viewport,
             detach_viewport,
             workspace_snapshot,
+            reaction::reaction_snapshot,
+            reaction::capture_endpoint,
+            reaction::save_atom_mapping,
+            reaction::start_neb,
+            start_transition,
+            start_thermochemistry,
+            start_refinement,
+            barriers::compare_barriers,
+            rates::compare_rates,
+            reaction::show_neb_image,
             valence::atom_valence,
             valence::analyze_bonds,
             panel_windows::layout_snapshot,

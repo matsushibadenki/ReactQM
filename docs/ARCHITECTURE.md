@@ -218,3 +218,43 @@ The optional locked Worker extra loads tblite in the existing isolated process. 
 ## Electronic fields
 
 The PySCF Worker samples converged orbitals and total density on a 40³ Cartesian grid from the final geometry and stores the grids, Å origin/spacing, units and orbital provenance in the checksummed result HDF5. Density is the sum of both spin components for unrestricted calculations. HDF5 extraction runs in a bounded Worker process, verifies the bytes against the stored receipt, and returns one binary grid to Rust. Rust extracts both signed orbital phases (or the single positive density phase) with marching tetrahedra outside the UI thread. The native viewport caches the triangle buffers in wgpu. WebView receives availability and sends selection commands only. A revision and job identity guard prevents late loads from attaching to a changed project.
+
+
+## Reaction endpoints
+
+Rust snapshots the active Document into the reactant or product slot and atomically persists the pair and its optional mapping in reaction-v1.json. The workspace lease and a revision check serialize updates. Mapping is an explicit one-based permutation from reactant to product, with equality of atom counts, element counts, net charge and spin, and element equality for each pair. Changing either endpoint clears the confirmed mapping. WebView receives endpoint summaries and atom numbers for the editor.
+
+
+## NEB and CI-NEB
+
+At submission, Rust freezes the reactant, the confirmed mapping applied to product coordinates, and the current PySCF settings into the queue request. The isolated Worker uses five fixed-endpoint images, separate PySCF calculators and ASE FIRE with improved tangents. Each fully evaluated step atomically checkpoints the five images against the request digest. Resuming creates a new linked attempt with a fresh FIRE state. Completed path coordinates and forces stay in the verified artifacts and Rust. The WebView receives five scalar summaries and sends only an image index; the renderer uses a common center and extent for all preview images.
+
+
+## Transition state verification
+
+A verified CI-NEB receipt supplies the highest-energy interior image, original mapped endpoints and frozen PySCF settings. The optional locked Sella Worker adapter uses order-one optimization with an analytic PySCF Hessian. PySCF harmonic analysis removes rigid motions, and Sella IRC runs in both directions only for one significant imaginary mode. Each branch must converge independently. Proper-rotation aligned RMSD uses the original atom order; distinct endpoint matches are required for confirmation. HDF5 retains the Hessian, frequencies, IRC trajectories, criteria and provenance. Rust validates the summary and strips geometry from the WebView projection.
+
+
+## Electronic barrier comparison
+
+The comparison command restores up to two verified path or transition receipts. A transition row also restores its source CI-NEB receipt for fixed endpoint energies. Rust derives forward, reverse and reaction electronic energy differences in kJ/mol and returns scalar summaries. Matching ordered endpoint geometry, elements, charge, multiplicity, settings and engine version are required for like-for-like comparison. The UI distinguishes a sampled peak from a saddle checked by frequency and IRC. Thermal corrections require additional endpoint data.
+
+
+## Endpoint thermochemistry
+
+A thermal request freezes the optimized saddle and the two original mapped CI-NEB endpoint geometries from verified receipts. The Worker runs analytic PySCF frequency analyses at the fixed geometries with the same electronic settings. Thermochemistry uses ideal-gas RRHO at 101325 Pa and the requested temperature. Endpoints require zero imaginary modes, the saddle requires one, and all structures must pass force and soft-mode checks before publishing corrections. The receipt-backed HDF5 and report retain the criteria, temperature, per-structure frequencies, zero-point and Gibbs energies, and source identity. Each reported directional barrier requires an eligible saddle and its corresponding endpoint.
+
+
+## Solvent and standard state
+
+The thermal worker optionally follows each gas-phase RRHO calculation with a self-consistent PySCF C-PCM or IEF-PCM single point at the same geometry. It adds the PCM minus gas electronic-energy difference to gas-phase Gibbs energy. Water and acetonitrile use fixed dielectric constants. The receipt-backed HDF5 stores PCM and cavity parameters plus the per-species electronic energies. An optional molar standard state adds RT ln(C°RT/p°) per species to both environments; the shift cancels for barriers defined between one registered species and one saddle. Existing reports without environment fields deserialize as gas phase at 1 atm.
+
+
+## Eyring rate comparison
+
+Rust restores up to two thermal receipts and derives activation Gibbs energies for both directions, with optional PCM corrections. It evaluates canonical Eyring transition-state theory with transmission coefficient one and returns log10 rates so very small values do not underflow. An unavailable or nonpositive directional barrier produces no rate. A like-for-like comparison requires the same source transition, electronic settings and engine version. The WebView renders only scalar condition summaries.
+
+
+## Correlated electronic refinement
+
+A verified IRC-connected singlet transition and its CI-NEB source provide fixed reactant, product and saddle geometries. Rust snapshots original method, engine, source identities and three electronic energies in the refinement input. The bounded PySCF Worker performs independent all-electron RHF and MP2 or CCSD plus perturbative triples calculations on each geometry, retaining the correlated, reference and triples energies with HDF5 provenance. The result contains no correlated gradient or thermal corrections. Rust validates the echoed baseline and the saved result before the WebView derives both barrier differences.

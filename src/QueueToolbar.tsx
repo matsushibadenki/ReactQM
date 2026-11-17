@@ -1,3 +1,4 @@
+import { refinementName } from './Refinement';
 import { conditionLabel } from './CalculationControls';
 import { messages, type Locale } from './i18n';
 import type { QueueProjection } from './useQueue';
@@ -8,10 +9,11 @@ export function QueueToolbar({ locale, state, job, disabled, onAction }: { local
   const { queue } = state;
   async function action(name: string, args: Record<string, unknown>) { await onAction(name, args); await state.refresh(); }
   const cancelling = queue.active?.status === 'cancelling' || (job?.id === queue.active?.id && job?.status === 'cancelling');
+  const transitionPhase = [t.transitionJob, t.frequencies, t.ircForward, t.ircReverse][job?.cycle ?? 0] ?? t.transitionJob;
   return <div className="queue-toolbar" role="toolbar" aria-label={t.queue}>
     <button type="button" title={queue.paused ? t.resumeQueue : t.pauseQueue} aria-label={queue.paused ? t.resumeQueue : t.pauseQueue} disabled={disabled || state.loading} onClick={() => void action('set_queue_paused', { paused: !queue.paused })}><Glyph name={queue.paused ? 'play' : 'pause'} /></button>
     <span className="queue-overview">{t.queue} <strong>{queue.waiting}</strong><span>{queue.paused ? t.queuePaused : t.queueEnabled}</span></span>
-    <div className="active-job-summary" role="status">{queue.active ? <><strong title={queue.active.settings ? conditionLabel(queue.active.settings) : undefined}>{queue.active.formula}</strong><span title={queue.active.name}>{queue.active.name || t.untitled}</span><small>{cancelling ? t.cancelling : t.running} · {queue.active.settings?.method === 'GFN2-xTB' ? 'GFN2-xTB' : `${queue.active.optimize ? t.optimizationStep : t.cycle} ${job?.id === queue.active.id ? job.cycle : 0}`}</small></> : null}</div>
+    <div className="active-job-summary" role="status">{queue.active ? <><strong title={queue.active.settings ? conditionLabel(queue.active.settings) : undefined}>{queue.active.formula}</strong><span title={queue.active.name}>{queue.active.name || t.untitled}</span><small>{cancelling ? t.cancelling : t.running} · {queue.active.refinement ? `${refinementName(queue.active.refinement)} · ${[t.reactant, t.product, t.transitionJob][job?.cycle ?? 0] ?? ''}` : queue.active.thermochemistry ? `${t.thermalTitle} · ${[t.reactant, t.product, t.transitionJob][job?.cycle ?? 0] ?? t.thermalTitle}` : queue.active.transition ? transitionPhase : queue.active.settings?.method === 'GFN2-xTB' ? 'GFN2-xTB' : `${queue.active.neb != null ? `${queue.active.neb ? 'CI-NEB' : 'NEB'} · ${t.optimizationStep}` : queue.active.optimize ? t.optimizationStep : t.cycle} ${job?.id === queue.active.id ? job.cycle : 0}`}</small></> : null}</div>
     {queue.active ? <button type="button" title={t.cancel} aria-label={`${t.cancel}: ${queue.active.name || queue.active.formula}`} disabled={disabled || cancelling} onClick={() => void action('cancel_job', { id: queue.active!.id })}><Glyph name="stop" /></button> : null}
   </div>;
 }

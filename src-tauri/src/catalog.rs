@@ -34,6 +34,10 @@ pub struct Catalog {
 #[serde(rename_all = "camelCase")]
 pub struct JobRecord {
     pub optimize: bool,
+    pub neb: Option<bool>,
+    pub transition: bool,
+    pub thermochemistry: bool,
+    pub refinement: Option<crate::refinement::Method>,
     pub multiplicity: Option<u32>,
     pub resumable: bool,
     pub sequence: i64,
@@ -58,6 +62,10 @@ pub struct JobPage {
 #[serde(rename_all = "camelCase")]
 pub struct QueueItem {
     pub optimize: bool,
+    pub neb: Option<bool>,
+    pub transition: bool,
+    pub thermochemistry: bool,
+    pub refinement: Option<crate::refinement::Method>,
     pub multiplicity: Option<u32>,
     pub settings: Option<crate::settings::CalculationSettings>,
     pub sequence: i64,
@@ -327,6 +335,16 @@ impl Catalog {
                 formula: row.get(3)?,
                 status: row.get(4)?,
                 settings: request.as_ref().map(JobRequest::effective_settings),
+                neb: request
+                    .as_ref()
+                    .and_then(|job| job.neb.as_ref().map(|path| path.climb)),
+                refinement: request
+                    .as_ref()
+                    .and_then(|job| job.refinement.as_ref().map(|path| path.method)),
+                thermochemistry: request
+                    .as_ref()
+                    .is_some_and(|job| job.thermochemistry.is_some()),
+                transition: request.as_ref().is_some_and(|job| job.transition.is_some()),
                 multiplicity: request.map(|job| job.document.spin + 1),
                 optimize: is_optimization(&json),
             })
@@ -453,14 +471,30 @@ impl Catalog {
                 let json: String = row.get(10)?;
                 let request = saved_request(&json);
                 let optimize = is_optimization(&json);
-                let resumable = optimize
+                let neb = request
+                    .as_ref()
+                    .and_then(|job| job.neb.as_ref().map(|path| path.climb));
+                let resumable = (optimize || neb.is_some())
                     && can_resume(&status)
-                    && self
-                        .directory(&id)
-                        .is_ok_and(|dir| dir.join(CHECKPOINT).is_file());
+                    && self.directory(&id).is_ok_and(|dir| {
+                        dir.join(if neb.is_some() {
+                            "neb-checkpoint.json"
+                        } else {
+                            CHECKPOINT
+                        })
+                        .is_file()
+                    });
                 Ok(JobRecord {
                     optimize,
                     resumable,
+                    neb,
+                    refinement: request
+                        .as_ref()
+                        .and_then(|job| job.refinement.as_ref().map(|path| path.method)),
+                    thermochemistry: request
+                        .as_ref()
+                        .is_some_and(|job| job.thermochemistry.is_some()),
+                    transition: request.as_ref().is_some_and(|job| job.transition.is_some()),
                     sequence: row.get(0)?,
                     id,
                     name: row.get(2)?,
@@ -516,7 +550,7 @@ impl Catalog {
     }
     pub fn resume_source(&self, id: &str) -> Result<JobRequest, String> {
         let (mut request, status, _) = self.row(id)?;
-        if !request.optimize || !can_resume(&status) {
+        if (!request.optimize && request.neb.is_none()) || !can_resume(&status) {
             return Err("optimization_checkpoint".into());
         }
         let directory = self.directory(id)?;
@@ -526,6 +560,22 @@ impl Catalog {
             != serde_json::to_vec(&request).map_err(storage)?
         {
             return Err("optimization_checkpoint".into());
+        }
+        if let Some(path) = &request.neb {
+            #[derive(Deserialize)]
+            struct Checkpoint {
+                input_sha256: String,
+                summary: crate::neb::NebResult,
+            }
+            let saved: Checkpoint =
+                read_json(&directory.join("neb-checkpoint.json")).map_err(|_| "neb_checkpoint")?;
+            if saved.input_sha256 != digest(&input_path)?.1 || saved.summary.climb != path.climb {
+                return Err("neb_checkpoint".into());
+            }
+            saved.summary.validate(&request.document, false)?;
+            path.validate_frames(&request, &saved.summary.positions)?;
+            request.neb.as_mut().unwrap().restart = Some(saved.summary.positions);
+            return Ok(request);
         }
         let checkpoint: OptimizationCheckpoint =
             read_json(&directory.join(CHECKPOINT)).map_err(|_| "optimization_checkpoint")?;
@@ -915,6 +965,10 @@ mod tests {
             optimization: None,
             spin_squared: None,
             fields: Vec::new(),
+            neb: None,
+            transition: None,
+            thermochemistry: None,
+            refinement: None,
             settings: None,
             job_id: request.job_id.clone(),
             input_hash: request.input_hash.clone(),

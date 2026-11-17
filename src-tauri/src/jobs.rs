@@ -32,6 +32,14 @@ pub struct JobRequest {
     pub settings: Option<crate::settings::CalculationSettings>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub optimize: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neb: Option<crate::neb::NebInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<crate::transition::TransitionInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermochemistry: Option<crate::thermochemistry::Input>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refinement: Option<crate::refinement::Input>,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -41,6 +49,18 @@ impl JobRequest {
         self.document.validate()?;
         if self.optimize && self.document.atoms.len() < 2 {
             return Err("optimization_atoms".into());
+        }
+        if let Some(neb) = &self.neb {
+            neb.validate(self)?;
+        }
+        if let Some(transition) = &self.transition {
+            transition.validate(self)?;
+        }
+        if let Some(thermo) = &self.thermochemistry {
+            thermo.validate(self)?;
+        }
+        if let Some(refinement) = &self.refinement {
+            refinement.validate(self)?;
         }
         let settings = self.effective_settings();
         settings.validate()?;
@@ -79,6 +99,35 @@ impl JobRequest {
         Ok(())
     }
     pub fn validate_result(&self, result: &Calculation) -> Result<(), String> {
+        match (&self.neb, &result.neb) {
+            (Some(input), Some(output)) if input.climb == output.climb => {
+                input.validate_frames(self, &output.positions)?
+            }
+            (None, None) => {}
+            _ => return Err("result_invalid".into()),
+        }
+        match (&self.transition, &result.transition) {
+            (Some(input), Some(output))
+                if input.source_job == output.source_job
+                    && input.seed_image == output.seed_image => {}
+            (None, None) => {}
+            _ => return Err("result_invalid".into()),
+        }
+        match (&self.thermochemistry, &result.thermochemistry) {
+            (Some(input), Some(report))
+                if input.source_job == report.source_job
+                    && input.temperature_kelvin == report.temperature_kelvin
+                    && input.standard_state == report.standard_state
+                    && input.solvent == report.solvent => {}
+            (None, None) => {}
+            _ => return Err("result_invalid".into()),
+        }
+        match (&self.refinement, &result.refinement) {
+            (Some(input), Some(report))
+                if input.method == report.method && input.baseline == report.baseline => {}
+            (None, None) => {}
+            _ => return Err("result_invalid".into()),
+        }
         let document = self.result_document(result)?;
         result.validate(&document)?;
         if result.input_hash != self.input_hash
@@ -106,6 +155,9 @@ impl JobRequest {
     }
 
     pub fn result_document(&self, result: &Calculation) -> Result<Document, String> {
+        if let Some(output) = &result.transition {
+            return crate::neb::frame(&self.document, &output.positions_angstrom);
+        }
         match &result.optimization {
             Some(output) => self.document_at(&output.positions_angstrom),
             None => Ok(self.document.clone()),
@@ -162,6 +214,10 @@ impl JobRequest {
             conv_tol: 1e-9,
             settings: None,
             optimize: false,
+            neb: None,
+            transition: None,
+            thermochemistry: None,
+            refinement: None,
         }
     }
 }
@@ -245,6 +301,9 @@ pub fn execute(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(log));
+    if request.transition.is_some() {
+        command.env("JAX_COMPILATION_CACHE_DIR", directory.join("jax-cache"));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -303,7 +362,7 @@ pub fn execute(
                         cycle,
                     } if job_id == request.job_id
                         && cycle
-                            <= if request.optimize {
+                            <= if request.optimize || request.neb.is_some() {
                                 50
                             } else {
                                 request.max_cycle + 1
@@ -330,6 +389,12 @@ pub fn execute(
                                     | "optimization_limit"
                                     | "screening_missing"
                                     | "screening_not_converged"
+                                    | "neb_limit"
+                                    | "transition_limit"
+                                    | "transition_missing"
+                                    | "solvent_not_converged"
+                                    | "refinement_scope"
+                                    | "refinement_not_converged"
                             ) {
                                 code
                             } else {

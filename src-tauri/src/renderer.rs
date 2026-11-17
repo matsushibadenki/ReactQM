@@ -128,6 +128,24 @@ impl Default for Renderer {
     }
 }
 impl Renderer {
+    pub(crate) fn invalidate_scene(&mut self) {
+        self.document_revision = None;
+    }
+    pub(crate) fn preview_path_image(
+        &mut self,
+        document: &Document,
+        revision: u64,
+        center: glam::Vec3,
+        radius: f32,
+    ) {
+        self.scene = Scene::from_document(Some(document));
+        self.scene.center = center;
+        self.scene.radius = radius;
+        self.molecule_radius = radius;
+        self.document_revision = Some(revision);
+        self.selected = None;
+        self.bond_analysis = None;
+    }
     fn sync_scene(&mut self, document: Option<&Document>, revision: u64) {
         if self.document_revision != Some(revision) {
             self.scene = Scene::from_document(document);

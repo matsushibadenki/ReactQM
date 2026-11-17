@@ -22,6 +22,11 @@
     "test:window-geometry": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example window_geometry_probe",
     "test:bond-render": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example bond_render_probe",
     "test:settings": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example settings_probe",
+    "test:refinement": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example refinement_probe",
+    "test:rates": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example rate_probe",
+    "test:thermochemistry": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example neb_probe -- --thermochemistry",
+    "test:transition": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example neb_probe -- --transition",
+    "test:neb": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example neb_probe",
     "test:fields": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example bond_render_probe -- --fields",
     "test:screening": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example settings_probe -- --screening"
   },

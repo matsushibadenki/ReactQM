@@ -293,3 +293,40 @@ main { padding-top: 0; }
 .electronic-fields { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 6px; }
 .electronic-fields label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .electronic-fields select { min-width: 0; }
+
+.reaction-editor { margin-top: 12px; }
+.reaction-endpoints, .reaction-map { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0; }
+.reaction-endpoints > div { display: grid; flex: 1 1 140px; min-width: 0; gap: 4px; justify-items: start; }
+.reaction-endpoints span { overflow-wrap: anywhere; }
+
+.neb-results { margin-top: 8px; font-variant-numeric: tabular-nums; }
+.neb-results table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+.neb-results th, .neb-results td { padding: 4px; text-align: end; }
+.neb-results th:first-child { text-align: start; }
+.neb-results button[aria-pressed=true] { border-color: #6184b4; font-weight: 700; }
+
+.transition-result { margin-bottom: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.transition-result p { margin: 4px 0; }
+.transition-result small { display: block; }
+
+.barrier-comparison { margin: 8px 0; font-variant-numeric: tabular-nums; }
+.barrier-comparison p { margin: 6px 0; }
+.barrier-cards { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+.barrier-cards article { flex: 1 1 155px; min-width: 0; border: 1px solid currentColor; border-radius: 6px; padding: 8px; overflow-wrap: anywhere; }
+.barrier-cards small, .barrier-cards code { display: block; }
+.barrier-cards dl { margin: 5px 0; }
+.barrier-cards dl div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px; }
+.barrier-cards dd { margin: 0; }
+.job-record-actions button[aria-pressed=true] { outline: 2px solid #6184b4; outline-offset: -2px; }
+
+.thermal-queue { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.thermal-queue input { width: 7em; }
+.thermal-results table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.thermal-results th, .thermal-results td { padding: 4px; overflow-wrap: anywhere; text-align: end; }
+.thermal-results th:first-child { text-align: start; }
+
+.thermal-standard-shift { display: block; }
+
+.rate-table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.rate-table th, .rate-table td { padding: 4px 2px; text-align: end; }
+.rate-table th:first-child { text-align: start; }
