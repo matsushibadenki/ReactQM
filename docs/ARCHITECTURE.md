@@ -97,6 +97,8 @@ Restore is revision-checked and participates in Undo. Retry reads the saved requ
 
 ## Panel layout and native utility windows
 
+Rust creates the main window with `WebviewWindowBuilder::from_config` during setup, after initializing shared state. The main window entry in `tauri.conf.json` supplies its settings with automatic creation disabled. The main window and each floating panel are top-level `WebviewWindow` instances with no native parent.
+
 `Workspace.layout` owns a versioned arrangement of exactly two utility panels: result and history. Each panel appears once, either in the right/bottom dock or in its own native window. The molecule stays in `main`; no second renderer is created. Independent floating windows read the same revisioned workspace, queue and history and issue the same document commands. Import drafts and local UI loading/error state are per projection; documents, Undo and jobs are shared.
 
 `layout_snapshot` / `layout-changed` carry the small layout plus a startup/recovery error. `update_layout(expected_revision, action)` supports move/reorder, active tab, tab/split mode, bounded 25–60% side width, and reset. An application-owned asynchronous gate serializes changes and native close/restore. Stale revisions are rejected and refreshed. Native window construction does not hold the document mutex and runs from an async command/task, following the [Tauri window-creation guidance](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindowBuilder.html). Window labels are a fixed allowlist (`panel-result`, `panel-history`), with event subscription capabilities only; JavaScript has no general window-creation or filesystem permissions.

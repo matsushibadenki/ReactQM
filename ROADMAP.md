@@ -18,6 +18,7 @@
 ## 設計方針
 
 - Tauri 2 + Rustを中核とし、React + TypeScriptはコマンド入力と小さな状態の表示を担当。
+- メイン窓と独立表示したパネルは、Rustから親なしのTauri `WebviewWindow` として作成する。
 - Document / State / Rendererの所有者はRustのアプリ状態。各ウインドウはその投影を表示し、分子データやジョブ状態を個別に所有しない。
 - 3D描画・画像処理・GPU処理はRust + wgpu。参照スレッドのThree.js / 3Dmol.js案は採用しない。大容量フレーム・電子密度・軌道・軌跡をJavaScriptに流さない。
 - 科学計算は独立Python Worker。Rustが入力、実行、キャンセル、成果物、再現性を管理する。

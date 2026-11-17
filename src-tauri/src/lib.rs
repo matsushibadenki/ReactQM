@@ -613,6 +613,14 @@ pub fn run() {
                 .map(|dir| dir.join("workspace.json").is_file())
                 .unwrap_or(false);
             app.state::<AppState>().0.lock().unwrap().saved_available = exists;
+            let main_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .ok_or_else(|| std::io::Error::other("Missing main window configuration"))?;
+            tauri::WebviewWindowBuilder::from_config(app, main_config)?.build()?;
             Scheduler::start(app.handle().clone());
             panel_windows::setup(app.handle());
             Ok(())
