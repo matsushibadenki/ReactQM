@@ -23,7 +23,7 @@ pub struct Baseline {
 }
 
 impl Baseline {
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         self.settings.validate()?;
         if uuid::Uuid::parse_str(&self.source_job).is_err()
             || uuid::Uuid::parse_str(&self.path_job).is_err()
@@ -105,6 +105,34 @@ pub fn from_transition(
     method: Method,
     basis: String,
 ) -> Result<JobRequest, String> {
+    let path = verified_path(store, id)?;
+    let mut request = JobRequest::with_settings(
+        path.document,
+        revision,
+        CalculationSettings {
+            basis,
+            ..Default::default()
+        },
+    )?;
+    request.refinement = Some(Input {
+        method,
+        baseline: path.baseline,
+        reactant: path.reactant,
+        product: path.product,
+    });
+    request.validate()?;
+    Ok(request)
+}
+
+pub(crate) struct VerifiedPath {
+    pub document: Document,
+    pub baseline: Baseline,
+    pub seed_image: usize,
+    pub reactant: Vec<[f64; 3]>,
+    pub product: Vec<[f64; 3]>,
+}
+
+pub(crate) fn verified_path(store: &Catalog, id: &str) -> Result<VerifiedPath, String> {
     let project = store.restore(id)?;
     let result = project.calculation.ok_or("refinement_source")?;
     let ts = result.transition.ok_or("refinement_source")?;
@@ -129,16 +157,9 @@ pub fn from_transition(
     {
         return Err("refinement_source".into());
     }
-    let mut request = JobRequest::with_settings(
-        project.document.ok_or("refinement_source")?,
-        revision,
-        CalculationSettings {
-            basis,
-            ..Default::default()
-        },
-    )?;
-    request.refinement = Some(Input {
-        method,
+    Ok(VerifiedPath {
+        document: project.document.ok_or("refinement_source")?,
+        seed_image: ts.seed_image,
         baseline: Baseline {
             source_job: id.into(),
             path_job: ts.source_job,
@@ -152,7 +173,5 @@ pub fn from_transition(
         },
         reactant: band.positions[0].clone(),
         product: band.positions[4].clone(),
-    });
-    request.validate()?;
-    Ok(request)
+    })
 }

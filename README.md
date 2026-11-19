@@ -238,6 +238,38 @@ English: Queue transition verification from a completed CI-NEB job, then restore
 
 溶液値は気相構造のPCM単一点エネルギーに気相RRHO熱補正を加えた近似です。溶液中での再最適化、溶液ヘッセ行列、非静電的溶媒和項は含みません。1 atmから1 Mへは各化学種のGに RT ln(C°RT/p°) を加えます。各側を単一化学種として扱う現行経路では、この項は障壁差で相殺されます。温度、標準状態、溶媒、誘電率、PCM設定と気相・溶媒中のエネルギーを成果物に保存します。
 
+### 溶液中の構造最適化・振動数
+
+閉殻分子（2〜10原子）を読み込み、計算手法をRHFに設定します。計算パネルの「溶液中の最適化・振動数」でモデルと溶媒を選んで待機列に追加します。上部に最適化ステップと振動数解析の進捗が表示されます。完了後に計算履歴から復元すると、最適化構造が3Dビューに表示され、計算パネルで振動数・最大力・極小判定を確認できます。
+
+#### Worker CLI
+
+保存済みRHF単一点ジョブの `input.json` から、気相の初期構造をPCM溶媒中で緩和し、同じ溶媒条件で調和振動数を求めます。対象は2〜10原子の閉殻系です。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker solution   --input path/to/input.json --output-dir solution-run   --solvent-model c_pcm --solvent water --steps 50
+```
+
+`--solvent-model` は `c_pcm`／`ief_pcm`、`--solvent` は `water`／`acetonitrile` です。最大力が0.01 eV/Å未満に達するとヘッセ行列を計算します。溶媒条件・入力・構造・ヘッセ行列・符号付き振動数は `solution.h5`、収束診断と振動数は `solution-result.json` に保存します。全振動モードが20 cm⁻¹を超えた場合に極小確認フラグを立てます。
+
+### 溶液中の遷移状態と電子エネルギー障壁
+
+計算履歴から、両方向のIRCを検証済みの気相RHF遷移状態を復元します。計算結果の「溶液中の遷移状態・障壁」でPCMモデルと溶媒を指定し、待機列に追加します。上部に反応物・生成物の最適化、鞍点、振動数、IRC正逆の段階が表示されます。待機中・実行中は既存の取消操作を使えます。
+
+完了した結果を履歴から復元すると、3DビューでIRCの方向とフレームを選べます。障壁表は気相の保存済みCI-NEB端点と鞍点、およびPCMで緩和した両端点と鞍点の電子エネルギー差を比較します。溶液側は経路未確認時に空欄になります。
+
+#### Worker CLI
+
+原子対応付きの遷移状態ジョブの `input.json` を指定します。保存された鞍点探索の初期構造と両端点から、同じPCM条件で構造最適化、振動数解析、両方向のIRCを行います。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker solution-path \
+  --input path/to/transition/input.json --output-dir solution-path-run \
+  --solvent-model c_pcm --solvent water
+```
+
+両端点が極小で、鞍点の有意な虚振動が1つあり、IRCがそれぞれ緩和後の端点に接続する場合に、正逆の電子エネルギー障壁を kJ/mol で出力します。構造・ヘッセ行列・IRC軌跡は `path.h5`、判定と障壁は `path-result.json` に保存します。閉殻RHFの2〜10原子が対象です。
+
 ## Eyring速度定数と条件比較
 
 計算履歴で完了済みの熱化学結果を最大2件選び、「速度定数を比較」を押します。温度・標準状態・溶媒別に、正逆の自由エネルギー障壁と速度定数（s⁻¹）を確認できます。比較は同じ遷移状態の元ジョブと電子状態の条件を基準にします。
@@ -419,3 +451,19 @@ ROADMAP.md                 進捗・完了条件・次の優先順位
 2026-11-10：独立窓の位置・サイズ保存と画面外回収を追加。`npm run test:window-geometry`は一時保存先でネイティブ窓を生成し、保存・再読込・窓再作成・画面外回収・リセットを検証します（デスクトップへのアクセスが必要）。Rust 37 unit＋2 process、`npm run build`成功。単一画面での自動API検証済み。異倍率の複数画面・画面取り外しの実機検証と、ドラッグ等の目視操作確認は保留です。
 
 2026-11-10（パネル操作）：Rust 37 unit＋2 process、build成功。Chromeの操作fixtureでキー操作・実ドラッグ・保存失敗時のフォーカス、日英中×320／375／1100px×明暗を確認。macOSではキーボード移動・独立窓の初期フォーカス・再ドック・閉じる後の復帰・最小化から再表示・固定ヘッダー下の表示補正を確認しました。今回のネイティブ実ポインタドラッグはUI自動化で配置変更を確認できず、追加検証を保留しています。
+
+## 分子動力学
+
+計算パネルの「分子動力学」でNVE／Langevin、時間刻み、ステップ数、温度、乱数シードを指定し、待機列へ追加します。上部に実行ステップが表示され、待機中・実行中のジョブを取り消せます。完了後は計算履歴から復元し、3Dビューで再生・一時停止・フレーム移動ができます。軌跡はローカルのジョブ成果物に保存します。
+
+### Worker CLI
+
+保存済みPySCF単一点ジョブの `input.json` から、気相の2〜10原子を対象にBorn–Oppenheimer分子動力学を実行できます。新規の出力ディレクトリを指定してください。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker dynamics \
+  --input path/to/input.json --output-dir md-run \
+  --ensemble nve --steps 80 --timestep-fs 0.25 --temperature-k 300 --seed 42
+```
+
+`nve` は温度を初期運動量のサンプリングに使用します。`langevin` は同じ温度をサーモスタットの目標値にも使用し、摩擦係数は0.02 fs⁻¹です。瞬間温度は並進・回転を含む全自由度から求めます。時間刻みは0.05〜2 fs、実行は1〜500ステップです。軌跡と入力・エンジン情報は `trajectory.h5`、温度とNVEのエネルギー偏差は `dynamics-result.json` に保存します。

@@ -28,7 +28,10 @@
     "test:transition": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example neb_probe -- --transition",
     "test:neb": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example neb_probe",
     "test:fields": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example bond_render_probe -- --fields",
-    "test:screening": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example settings_probe -- --screening"
+    "test:screening": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example settings_probe -- --screening",
+    "test:dynamics": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example dynamics_probe",
+    "test:solution": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example solution_probe",
+    "test:solution-path": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example solution_path_probe"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

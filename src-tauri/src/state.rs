@@ -180,6 +180,12 @@ impl Workspace {
                 .map_or(doc.is_some(), |saved| saved != &self.project),
             has_saved: self.saved_available,
             calculation: self.project.calculation.clone().map(|mut result| {
+                if let Some(path) = &mut result.solution_path {
+                    path.saddle.positions_angstrom.clear();
+                }
+                if let Some(solution) = &mut result.solution {
+                    solution.positions_angstrom.clear();
+                }
                 if let Some(optimization) = &mut result.optimization {
                     optimization.positions_angstrom.clear();
                 }
@@ -252,6 +258,9 @@ mod tests {
             transition: None,
             thermochemistry: None,
             refinement: None,
+            dynamics: None,
+            solution: None,
+            solution_path: None,
             settings: None,
             job_id: id.clone(),
             input_hash: document.fingerprint(),

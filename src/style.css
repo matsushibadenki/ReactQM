@@ -330,3 +330,20 @@ main { padding-top: 0; }
 .rate-table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 .rate-table th, .rate-table td { padding: 4px 2px; text-align: end; }
 .rate-table th:first-child { text-align: start; }
+
+.dynamics-player { display: grid; gap: 6px; }
+.dynamics-player input[type="range"] { width: min(180px, 100%); }
+.dynamics-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr));
+  align-items: end;
+  gap: 8px;
+  border: 0;
+  margin: 8px 0;
+  padding: 0;
+  min-width: 0;
+  min-inline-size: 0;
+}
+.dynamics-fields label { display: grid; gap: 4px; min-width: 0; }
+.dynamics-fields input, .dynamics-fields select { width: 100%; min-width: 0; }
+.dynamics-transport { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

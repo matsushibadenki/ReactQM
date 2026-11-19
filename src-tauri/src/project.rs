@@ -43,10 +43,60 @@ pub struct Calculation {
     pub thermochemistry: Option<crate::thermochemistry::Report>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refinement: Option<crate::refinement::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamics: Option<crate::dynamics::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solution: Option<crate::solution::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solution_path: Option<crate::solution_path::Report>,
 }
 
 impl Calculation {
     pub fn validate(&self, document: &Document) -> Result<(), String> {
+        if let Some(report) = &self.solution_path {
+            report.validate(document, self.energy_hartree)?;
+            if self.method != "RHF"
+                || document.spin != 0
+                || self.solution.is_some()
+                || self.optimization.is_some()
+                || self.dynamics.is_some()
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.refinement.is_some()
+                || !self.fields.is_empty()
+            {
+                return Err("result_invalid".into());
+            }
+        }
+        if let Some(report) = &self.solution {
+            if !report.valid(document)
+                || self.method != "RHF"
+                || document.spin != 0
+                || self.optimization.is_some()
+                || self.dynamics.is_some()
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.refinement.is_some()
+                || !self.fields.is_empty()
+            {
+                return Err("result_invalid".into());
+            }
+        }
+        if let Some(report) = &self.dynamics {
+            if !report.valid()
+                || !(2..=10).contains(&document.atoms.len())
+                || self.optimization.is_some()
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.refinement.is_some()
+                || !self.fields.is_empty()
+            {
+                return Err("result_invalid".into());
+            }
+        }
         if let Some(report) = &self.refinement {
             if self.optimization.is_some()
                 || self.neb.is_some()
@@ -94,7 +144,12 @@ impl Calculation {
         }
         if uuid::Uuid::parse_str(&self.job_id).is_err()
             || match &self.optimization {
-                None => self.transition.is_none() && self.input_hash != document.fingerprint(),
+                None => {
+                    self.transition.is_none()
+                        && self.solution.is_none()
+                        && self.solution_path.is_none()
+                        && self.input_hash != document.fingerprint()
+                }
                 Some(output) => {
                     output.steps > 50
                         || !(0.0..0.05).contains(&output.max_force_ev_per_angstrom)
@@ -248,6 +303,9 @@ mod tests {
             transition: None,
             thermochemistry: None,
             refinement: None,
+            dynamics: None,
+            solution: None,
+            solution_path: None,
             job_id: uuid::Uuid::new_v4().to_string(),
             input_hash: doc.fingerprint(),
             method: "RHF".into(),

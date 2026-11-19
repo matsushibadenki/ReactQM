@@ -10,6 +10,21 @@ SOLVENTS = {"water": 78.3553, "acetonitrile": 35.688}
 MODELS = {"c_pcm": "C-PCM", "ief_pcm": "IEF-PCM"}
 
 
+PCM_GRID = 29
+PCM_SCALE = 1.2
+PCM_PROBE = 0.0
+
+
+def pcm_solver(solver, solvent):
+    pcm = solver.PCM()
+    pcm.with_solvent.method = MODELS[solvent["model"]]
+    pcm.with_solvent.eps = SOLVENTS[solvent["medium"]]
+    pcm.with_solvent.lebedev_order = PCM_GRID
+    pcm.with_solvent.vdw_scale = PCM_SCALE
+    pcm.with_solvent.r_probe = PCM_PROBE
+    return pcm
+
+
 def standard_shift(temperature, standard_state):
     from pyscf.data import nist
 
@@ -55,12 +70,7 @@ def analyze(request, positions, temperature, saddle, conditions=None):
     }
     if solvent := conditions.get("solvent"):
         density = solver.make_rdm1()
-        pcm = solver.PCM()
-        pcm.with_solvent.method = MODELS[solvent["model"]]
-        pcm.with_solvent.eps = SOLVENTS[solvent["medium"]]
-        pcm.with_solvent.lebedev_order = 29
-        pcm.with_solvent.vdw_scale = 1.2
-        pcm.with_solvent.r_probe = 0.0
+        pcm = pcm_solver(solver, solvent)
         solvated = float(pcm.kernel(dm0=density))
         if not pcm.converged:
             raise ArithmeticError("solvent_not_converged")

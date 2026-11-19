@@ -1,21 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { SolutionIrc, type SolutionPathReport } from './SolutionPath';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { messages, errorMessage, type Locale } from './i18n';
+import { DynamicsPlayer, type DynamicsReport } from './Dynamics';
 import { MoleculeEditor, type Edit, type Selection } from './MoleculeEditor';
 
 type Action = { kind: 'orbit'; dx: number; dy: number } | { kind: 'zoom'; delta: number } | { kind: 'pick'; x: number; y: number } | { kind: 'fit' | 'bonds' | 'select_next' };
 type Valence = { documentRevision: number; index: number; status: 'inferred' | 'unsupported' | 'failed'; reason: string | null; engineVersion: string; valence: number | null; formalCharge: number | null; neighbors: number | null };
 export type Field = 'density' | 'homo' | 'lumo' | 'homo_alpha' | 'lumo_alpha' | 'homo_beta' | 'lumo_beta';
 type NebResult = { climb: boolean; steps: number; ase_version: string; max_neb_force_ev_per_angstrom: number; images: { energy_hartree: number; max_force_ev_per_angstrom: number }[] };
-export type FieldResult = { job_id: string; method: string; fields?: Field[]; neb?: NebResult };
+export type FieldResult = { job_id: string; method: string; fields?: Field[]; neb?: NebResult; dynamics?: DynamicsReport; solution_path?: SolutionPathReport };
 type View = { ready: boolean; documentRevision: number; selected: Selection | null; showBonds: boolean; bondCount: number; bondSource: 'rdkit' | 'geometry' | 'manual'; bondStatus: string; bondEngineVersion: string | null; doubleBondCount: number; tripleBondCount: number; pixelSize: number[]; frameCount: number };
 const icons = { fit: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M8 12h8m-4-4v8', plus: 'M12 5v14M5 12h14', minus: 'M5 12h14', bonds: 'm7 7 10 10M9 5l10 10M7 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6m10 10a3 3 0 1 0 0 6 3 3 0 0 0 0-6', atom: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18m0 6v6m-3-3h6' };
 function Glyph({ name }: { name: keyof typeof icons }) { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d={icons[name]} /></svg>; }
 
 export function MoleculeViewport({ locale, documentRevision, atomCount, manualBonds, editingDisabled, onEdit, result }: { locale: Locale; documentRevision: number; atomCount: number; manualBonds: boolean; editingDisabled: boolean; onEdit: (edit: Edit) => void; result: FieldResult | null }) {
   const t = messages[locale];
-  const pathMode = !!result?.neb;
+  const pathMode = !!(result?.neb || result?.dynamics || result?.solution_path);
   const element = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View | null>(null);
   const [valence, setValence] = useState<Valence | null>(null);
@@ -147,6 +149,7 @@ export function MoleculeViewport({ locale, documentRevision, atomCount, manualBo
   const analysisStatus = atomValence?.status === 'inferred' ? t.valenceInferred : atomValence?.status === 'unsupported' ? t.valenceUnsupported : atomValence?.status === 'failed' || valenceError ? t.valenceFailed : t.valenceAnalyzing;
   const analysisReason = valenceError === 'worker_missing' ? t.valenceWorkerMissing : valenceError?.startsWith('valence_timeout') ? t.valenceTimeout : atomValence?.reason === 'open_shell' ? t.valenceOpenShell : atomValence?.reason === 'element' ? t.valenceElement : t.valenceNoAssignment;
   const button = (icon: keyof typeof icons, label: string, action: Action, pressed?: boolean) => <button type="button" title={label} aria-label={label} aria-pressed={pressed} disabled={!enabled} onClick={() => schedule.current(action)}><Glyph name={icon} /></button>;
+  const redrawDynamics = useCallback(() => schedule.current(), []);
   return <div className="molecular-view">
     <div ref={element} className="native-viewport" tabIndex={0} role="group" aria-label={t.viewport} aria-describedby="viewport-help"
       onPointerDown={event => { if (!enabled || event.button !== 0) return; event.currentTarget.focus({ preventScroll: true }); event.currentTarget.setPointerCapture(event.pointerId); drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, moved: false, editing: event.shiftKey && !editingDisabled && !pathMode, revision: documentRevision }; }}
@@ -185,7 +188,7 @@ export function MoleculeViewport({ locale, documentRevision, atomCount, manualBo
       <button type="button" className="info" aria-label={t.viewportHelp}>ⓘ<span role="tooltip" id="viewport-help">{t.viewportHelp}</span></button>
     </div>
     {result && !pathMode && result.method !== 'GFN2-xTB' ? <ElectronicFields key={`${documentRevision}/${result.job_id}`} result={result} revision={documentRevision} locale={locale} redraw={() => schedule.current()} /> : null}
-    {result?.neb ? <NebImages key={`${documentRevision}/${result.job_id}`} result={result.neb} jobId={result.job_id} revision={documentRevision} locale={locale} redraw={() => schedule.current()} /> :
+    {result?.solution_path ? <SolutionIrc key={`${documentRevision}/${result.job_id}`} report={result.solution_path} jobId={result.job_id} revision={documentRevision} locale={locale} redraw={redrawDynamics} /> : result?.dynamics ? <DynamicsPlayer key={`${documentRevision}/${result.job_id}`} report={result.dynamics} jobId={result.job_id} revision={documentRevision} locale={locale} redraw={redrawDynamics} /> : result?.neb ? <NebImages key={`${documentRevision}/${result.job_id}`} result={result.neb} jobId={result.job_id} revision={documentRevision} locale={locale} redraw={() => schedule.current()} /> :
       <MoleculeEditor key={documentRevision} locale={locale} disabled={editingDisabled} selected={selected ?? null} onEdit={onEdit} />}
 
     <div className="viewport-status" role="status">

@@ -162,7 +162,7 @@ def atomic_json(path: Path, value: dict) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def evaluate(request, emit, checkpoint=None, on_converged=None):
+def evaluate(request, emit, checkpoint=None, on_converged=None, *, solvent=None):
     """Return energy in hartree, gradient in hartree/bohr and coordinates in Å."""
     validate_request(request)
     import numpy as np
@@ -178,6 +178,10 @@ def evaluate(request, emit, checkpoint=None, on_converged=None):
     if request["method"] in ("RKS", "UKS"):
         solver.xc = settings["xc"]
         solver.grids.level = settings["grid_level"]
+    if solvent is not None:
+        from .thermochemistry import pcm_solver
+
+        solver = pcm_solver(solver, solvent)
     solver.max_cycle = request["max_cycle"]
     solver.conv_tol = request["conv_tol"]
     solver.chkfile = checkpoint
@@ -211,6 +215,9 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
     transition = None
     thermal = None
     refinement = None
+    solution_path = None
+    solution = None
+    dynamics = None
     evaluation_request = request
     evaluation_emit = emit
     if request.get("optimize", False):
@@ -235,7 +242,103 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
         }
     solver = []
     is_screening = request["method"] == screening.METHOD
-    if request.get("refinement") is not None:
+    if request.get("solution_path") is not None:
+        import hashlib
+        import tempfile
+        from .solution_path import run
+
+        inputs = request["solution_path"]
+        transition_seed = {"source_job": inputs["baseline"]["path_job"], "seed_image": inputs["seed_image"],
+                           "reactant": inputs["reactant"], "product": inputs["product"]}
+        path_request = {key: value for key, value in request.items() if key != "solution_path"}
+        path_request["transition"] = transition_seed
+
+        def progress(phase):
+            emit({"kind": "progress", "schema_version": 1, "job_id": request["job_id"], "cycle": phase})
+
+        with tempfile.TemporaryDirectory(dir=output_dir) as scratch:
+            directory = Path(scratch) / "run"
+            path_input = Path(scratch) / "input.json"
+            atomic_json(path_input, path_request)
+            report = run(path_input, directory, **inputs["solvent"], steps=50, on_phase=progress)
+            path_artifact = directory / "path.h5"
+            with h5py.File(path_artifact, "r") as artifact:
+                saddle = artifact["saddle"]
+                names = ("irc_forward", "irc_reverse")
+                lengths = [len(saddle[name]) if name in saddle else 0 for name in names]
+                frame_bytes = b"".join(saddle[name][:].astype("<f8").tobytes() for name in names if name in saddle)
+                coordinates = saddle["positions"][:]
+            os.replace(path_artifact, output_dir / "solution-path.h5.tmp")
+        with (output_dir / "trajectory.bin").open("xb") as stream:
+            stream.write(frame_bytes)
+            stream.flush()
+            os.fsync(stream.fileno())
+        energy = report["saddle"]["electronic_hartree"]
+        engine_version = report["reactant"]["pyscf_version"]
+        spin_squared = gradients = None
+        solution_path = {
+            "solvent": inputs["solvent"], "baseline": inputs["baseline"],
+            "saddle": {**{key: value for key, value in report["saddle"].items() if key != "electronic_hartree"}, "source_job": transition_seed["source_job"],
+                       "seed_image": transition_seed["seed_image"]},
+            "endpoint_energies_hartree": [report[name]["electronic_hartree"] for name in ("reactant", "product")],
+            "endpoint_minima": [report[name]["minimum_confirmed"] for name in ("reactant", "product")],
+            "path_verified": report["path_verified"], "lengths": lengths,
+            "frames_sha256": hashlib.sha256(frame_bytes).hexdigest(),
+        }
+    elif request.get("solution") is not None:
+        import tempfile
+        from .solution import run
+
+        solvent = request["solution"]
+
+        def progress(step):
+            emit({"kind": "progress", "schema_version": 1, "job_id": request["job_id"], "cycle": step})
+
+        with tempfile.TemporaryDirectory(dir=output_dir) as scratch:
+            directory = Path(scratch) / "run"
+            report = run(output_dir / "input.json", directory, **solvent, steps=50, on_step=progress)
+            with h5py.File(directory / "solution.h5", "r") as artifact:
+                solution_data = {name: artifact[name][()] for name in ("positions", "hessian", "frequencies")}
+        coordinates = solution_data["positions"]
+        energy = report["electronic_hartree"]
+        engine_version = report["pyscf_version"]
+        spin_squared = gradients = None
+        solution = {key: report[key] for key in (
+            "steps", "max_force_ev_per_angstrom", "ase_version", "frequencies_cm1", "minimum_confirmed"
+        )}
+        solution.update(solvent=solvent, positions_angstrom=coordinates.tolist())
+    elif request.get("dynamics") is not None:
+        import hashlib
+        import tempfile
+        from ase import units
+        from .dynamics import run
+
+        params = request["dynamics"]
+        def progress(frame):
+            emit({"kind": "progress", "schema_version": 1, "job_id": request["job_id"], "cycle": frame})
+
+        with tempfile.TemporaryDirectory(dir=output_dir) as scratch:
+            directory = Path(scratch) / "run"
+            report = run(output_dir / "input.json", directory, **params, on_step=progress)
+            with h5py.File(directory / "trajectory.h5", "r") as trajectory:
+                frames = trajectory["positions_angstrom"][:]
+                dynamics_data = {name: trajectory[name][()] for name in trajectory
+                                 if name != "input_json"}
+            frame_bytes = frames.astype("<f8").tobytes()
+            with (output_dir / "trajectory.bin").open("xb") as stream:
+                stream.write(frame_bytes)
+                stream.flush()
+                os.fsync(stream.fileno())
+            dynamics = {"input": params, "frames": report["frames"], "ase_version": report["ase_version"],
+                        "numpy_version": report["numpy_version"],
+                        "mean_temperature_k": report["mean_temperature_k"],
+                        "nve_max_energy_deviation_ev": report["nve_max_energy_deviation_ev"],
+                        "frames_sha256": hashlib.sha256(frame_bytes).hexdigest()}
+            coordinates = frames[0]
+            energy = float(dynamics_data["potential_ev"][0] / units.Hartree)
+            engine_version = report["pyscf_version"]
+            spin_squared = gradients = None
+    elif request.get("refinement") is not None:
         import pyscf
         from .refinement import evaluate as evaluate_refinement
 
@@ -344,6 +447,29 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
         if gradients is not None:
             artifact.create_dataset("gradient", data=gradients).attrs["unit"] = "hartree/bohr"
         artifact.create_dataset("coordinates", data=coordinates).attrs["unit"] = "angstrom"
+        if solution_path is not None:
+            path_artifact = output_dir / "solution-path.h5.tmp"
+            with h5py.File(path_artifact, "r") as path:
+                group = artifact.create_group("solution_path")
+                for key, value in path.attrs.items():
+                    group.attrs[key] = value
+                for name in path:
+                    path.copy(name, group)
+            path_artifact.unlink()
+        if solution is not None:
+            group = artifact.create_group("solution")
+            group.attrs["report_json"] = json.dumps(report, allow_nan=False)
+            for name, unit in (("positions", "angstrom"), ("hessian", "hartree/bohr^2"), ("frequencies", "cm^-1")):
+                group.create_dataset(name, data=solution_data[name]).attrs["unit"] = unit
+        if dynamics is not None:
+            group = artifact.create_group("dynamics")
+            group.attrs["report_json"] = json.dumps(dynamics, allow_nan=False)
+            group.attrs["input_sha256"] = report["input_sha256"]
+            if params["ensemble"] == "langevin":
+                group.attrs["friction_per_fs"] = report["friction_per_fs"]
+            for name, values in dynamics_data.items():
+                group.create_dataset(name, data=values)
+            group["momenta_ase"].attrs["unit"] = "sqrt(eV * atomic mass unit)"
         if refinement is not None:
             group = artifact.create_group("refinement")
             group.attrs["method"] = refinement["method"]
@@ -439,6 +565,12 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
         result["transition"] = transition
     if band is not None:
         result["neb"] = band.summary
+    if solution_path is not None:
+        result["solution_path"] = solution_path
+    if solution is not None:
+        result["solution"] = solution
+    if dynamics is not None:
+        result["dynamics"] = dynamics
     if fields:
         result["fields"] = fields
     atomic_json(output_dir / "result.json", result)
@@ -465,7 +597,7 @@ def serve(output_dir: Path) -> int:
         code = "calculation_failed"
         if isinstance(error, screening.ScreeningUnavailable):
             code = "screening_missing"
-        elif isinstance(error, ArithmeticError) and str(error) in {"not_converged", "optimization_limit", "screening_not_converged", "neb_limit", "transition_limit", "transition_missing", "solvent_not_converged", "refinement_scope", "refinement_not_converged"}:
+        elif isinstance(error, ArithmeticError) and str(error) in {"not_converged", "optimization_limit", "screening_not_converged", "neb_limit", "transition_limit", "transition_missing", "solvent_not_converged", "refinement_scope", "refinement_not_converged", "solution_limit"}:
             code = str(error)
         emit({"kind": "error", "schema_version": 1, "job_id": request.get("job_id", "") if isinstance(request, dict) else "",
               "code": code})

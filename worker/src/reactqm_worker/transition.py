@@ -9,7 +9,7 @@ MATCH_RMSD = 0.35
 IMAGINARY_CUTOFF = 20.0
 
 
-def run(request, emit):
+def run(request, emit, *, solvent=None):
     import numpy as np
     from ase import Atoms, units
     from ase.calculators.calculator import Calculator, all_changes
@@ -33,7 +33,7 @@ def run(request, emit):
             {**atom, "position_angstrom": position}
             for atom, position in zip(document["atoms"], positions.tolist(), strict=True)
         ]}
-        return evaluate(image, lambda _: None, on_converged=on_converged)
+        return evaluate(image, lambda _: None, on_converged=on_converged, solvent=solvent)
 
     class Engine(Calculator):
         implemented_properties = ["energy", "forces"]

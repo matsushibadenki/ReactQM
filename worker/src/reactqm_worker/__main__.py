@@ -65,13 +65,46 @@ def smoke() -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ReactQM worker diagnostics")
-    parser.add_argument("command", choices=["doctor", "smoke", "calculate", "valence", "structure", "optimize", "field"])
+    parser.add_argument("command", choices=["doctor", "smoke", "calculate", "valence", "structure", "optimize", "field", "dynamics", "solution", "solution-path"])
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--fmax", type=float, default=0.05)
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--timestep-fs", type=float, default=0.5)
+    parser.add_argument("--temperature-k", type=float, default=300)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--ensemble", choices=["nve", "langevin"], default="nve")
+    parser.add_argument("--solvent-model", choices=["c_pcm", "ief_pcm"], default="c_pcm")
+    parser.add_argument("--solvent", choices=["water", "acetonitrile"], default="water")
     args = parser.parse_args()
+    if args.command in ("solution", "solution-path"):
+        if args.input is None or args.output_dir is None or args.resume:
+            parser.error(f"{args.command} requires --input and a fresh --output-dir")
+        if args.command == "solution-path":
+            from .solution_path import run
+        else:
+            from .solution import run
+
+        try:
+            result = run(args.input, args.output_dir, model=args.solvent_model,
+                         medium=args.solvent, steps=args.steps)
+            print(json.dumps(result, allow_nan=False))
+        except Exception as error:
+            parser.exit(1, f"Solution calculation failed: {error}\n")
+        return
+    if args.command == "dynamics":
+        if args.input is None or args.output_dir is None or args.resume:
+            parser.error("dynamics requires --input and a fresh --output-dir")
+        from .dynamics import run
+        try:
+            result = run(args.input, args.output_dir, steps=args.steps,
+                         timestep_fs=args.timestep_fs, temperature_k=args.temperature_k,
+                         seed=args.seed, ensemble=args.ensemble)
+            print(json.dumps(result, allow_nan=False))
+        except Exception as error:
+            parser.exit(1, f"Dynamics failed: {error}\n")
+        return
     if args.command == "optimize":
         if args.input is None or args.output_dir is None:
             parser.error("optimize requires --input and --output-dir")

@@ -38,6 +38,9 @@ pub struct JobRecord {
     pub transition: bool,
     pub thermochemistry: bool,
     pub refinement: Option<crate::refinement::Method>,
+    pub dynamics: Option<crate::dynamics::Input>,
+    pub solution: Option<crate::thermochemistry::Solvent>,
+    pub solution_path: Option<crate::thermochemistry::Solvent>,
     pub multiplicity: Option<u32>,
     pub resumable: bool,
     pub sequence: i64,
@@ -66,6 +69,9 @@ pub struct QueueItem {
     pub transition: bool,
     pub thermochemistry: bool,
     pub refinement: Option<crate::refinement::Method>,
+    pub dynamics: Option<crate::dynamics::Input>,
+    pub solution: Option<crate::thermochemistry::Solvent>,
+    pub solution_path: Option<crate::thermochemistry::Solvent>,
     pub multiplicity: Option<u32>,
     pub settings: Option<crate::settings::CalculationSettings>,
     pub sequence: i64,
@@ -253,7 +259,7 @@ impl Catalog {
         catalog.set_queue_paused(true)?;
         Ok(catalog)
     }
-    fn directory(&self, id: &str) -> Result<PathBuf, String> {
+    pub(crate) fn directory(&self, id: &str) -> Result<PathBuf, String> {
         check_id(id)?;
         let directory = self.root.join("jobs").join(id);
         if let Ok(metadata) = fs::symlink_metadata(&directory) {
@@ -338,6 +344,11 @@ impl Catalog {
                 neb: request
                     .as_ref()
                     .and_then(|job| job.neb.as_ref().map(|path| path.climb)),
+                dynamics: request.as_ref().and_then(|job| job.dynamics.clone()),
+                solution: request.as_ref().and_then(|job| job.solution),
+                solution_path: request
+                    .as_ref()
+                    .and_then(|job| job.solution_path.as_ref().map(|path| path.solvent)),
                 refinement: request
                     .as_ref()
                     .and_then(|job| job.refinement.as_ref().map(|path| path.method)),
@@ -488,6 +499,11 @@ impl Catalog {
                     optimize,
                     resumable,
                     neb,
+                    dynamics: request.as_ref().and_then(|job| job.dynamics.clone()),
+                    solution: request.as_ref().and_then(|job| job.solution),
+                    solution_path: request
+                        .as_ref()
+                        .and_then(|job| job.solution_path.as_ref().map(|path| path.solvent)),
                     refinement: request
                         .as_ref()
                         .and_then(|job| job.refinement.as_ref().map(|path| path.method)),
@@ -615,6 +631,12 @@ impl Catalog {
         if &result != calculation || result.job_id != request.job_id {
             return Err("artifact_invalid".into());
         }
+        if let Some(report) = &result.solution_path {
+            report.verify_frames(&directory, &request.document)?;
+        }
+        if let Some(report) = &result.dynamics {
+            report.read_frames(&directory, &request.document)?;
+        }
         let mut header = [0u8; 8];
         File::open(directory.join("result.h5"))
             .map_err(storage)?
@@ -692,6 +714,12 @@ impl Catalog {
         request.validate_result(&result)?;
         if result.job_id != request.job_id {
             return Err("artifact_invalid".into());
+        }
+        if let Some(report) = &result.solution_path {
+            report.verify_frames(&directory, &request.document)?;
+        }
+        if let Some(report) = &result.dynamics {
+            report.read_frames(&directory, &request.document)?;
         }
         Ok((result, receipt.artifacts[2].sha256.clone()))
     }
@@ -969,6 +997,9 @@ mod tests {
             transition: None,
             thermochemistry: None,
             refinement: None,
+            dynamics: None,
+            solution: None,
+            solution_path: None,
             settings: None,
             job_id: request.job_id.clone(),
             input_hash: request.input_hash.clone(),

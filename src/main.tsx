@@ -1,3 +1,6 @@
+import { SolutionBarriers, solutionPathLabels } from './SolutionPath';
+import { SolutionDetails, SolutionQueue, type SolutionReport } from './Solution';
+import { DynamicsQueue, ensembleName } from './Dynamics';
 import { RefinementComparison, RefinementQueue, refinementName, type RefinementReport } from './Refinement';
 import { Thermochemistry, ThermalQueue, type ThermalReport } from './Thermochemistry';
 import { ReactionEndpoints } from './ReactionEndpoints';
@@ -20,7 +23,7 @@ type Transition = {
   source_job: string; seed_image: number; sella_version: string; steps: number; imaginary_count: number; frequencies_cm1: number[];
   branches: { converged: boolean; match: 'reactant' | 'product' | null; reactant_rmsd_angstrom: number; product_rmsd_angstrom: number; max_force_ev_per_angstrom: number; steps: number }[];
 };
-type Calculation = FieldResult & { input_hash: string; basis: string; energy_hartree: number; engine_version: string; elapsed_seconds: number; converged: boolean; settings?: Settings; transition?: Transition; thermochemistry?: ThermalReport; refinement?: RefinementReport; spin_squared?: number; optimization?: { steps: number; max_force_ev_per_angstrom: number; ase_version: string } };
+type Calculation = FieldResult & { input_hash: string; basis: string; energy_hartree: number; engine_version: string; elapsed_seconds: number; converged: boolean; settings?: Settings; transition?: Transition; thermochemistry?: ThermalReport; refinement?: RefinementReport; solution?: SolutionReport; spin_squared?: number; optimization?: { steps: number; max_force_ev_per_angstrom: number; ase_version: string } };
 type JobStatus = 'running' | 'cancelling' | 'succeeded' | 'cancelled' | 'failed' | 'timed_out' | 'interrupted' | 'corrupt';
 type InputFormat = 'xyz' | 'smiles' | 'sdf';
 type StructureSource = { format: string; method: 'etkdgv3' | 'sdf_3d'; seed: number | null; engineVersion: string; inputHash: string };
@@ -125,7 +128,7 @@ function App() {
 
   const moleculePanel = (      <section aria-labelledby="molecule-title">
         <div className="heading"><h2 id="molecule-title">{t.molecule}</h2>{snapshot.dirty ? <span className="dirty" aria-label={t.unsaved} title={t.unsaved}>●</span> : null}</div>
-        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} manualBonds={snapshot.manualBonds} result={result?.transition || result?.thermochemistry || result?.refinement ? null : result} editingDisabled={locked} onEdit={edit => void command('edit_molecule', { edit })} />
+        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} manualBonds={snapshot.manualBonds} result={result?.transition || result?.thermochemistry || result?.refinement || result?.solution ? null : result} editingDisabled={locked} onEdit={edit => void command('edit_molecule', { edit })} />
         <div className="molecule-summary"><strong className="formula">{snapshot.formula || '—'}</strong><span>{snapshot.atomCount ? snapshot.name || t.untitled : t.empty}</span></div>
         <dl className="metrics"><div><dt>{t.atoms}</dt><dd>{snapshot.atomCount}</dd></div><div><dt>{t.charge} <Info text={t.chargeHelp} /></dt><dd>{snapshot.charge === 0 ? `0 · ${t.neutral}` : snapshot.charge > 0 ? `+${snapshot.charge}` : `−${Math.abs(snapshot.charge)}`}</dd></div><div><dt>{t.spin} <Info text={t.spinHelp} /></dt><dd>{snapshot.atomCount ? snapshot.spin + 1 : '—'}</dd></div></dl>
         {snapshot.atomCount ? <form key={snapshot.documentRevision} className="input-row multiplicity-editor" onSubmit={event => {
@@ -143,6 +146,8 @@ function App() {
       </section>);
   const panels = {
     result: <><div className="result-help"><Info text={(result?.method ?? snapshot.settings?.method) === 'GFN2-xTB' ? t.screeningHelp : t.calculationHelp} /></div>        <CalculationControls settings={snapshot.settings ?? defaultSettings} locale={snapshot.locale} spin={snapshot.spin} disabled={locked} onChange={settings => void command('set_calculation_settings', { settings })} />
+        <SolutionQueue locale={snapshot.locale} disabled={locked || snapshot.atomCount < 2 || snapshot.atomCount > 10 || snapshot.spin !== 0 || snapshot.settings?.method !== 'RHF'} queue={solvent => void command('start_solution', { solvent })} />
+        <DynamicsQueue locale={snapshot.locale} disabled={locked || snapshot.atomCount < 2 || snapshot.atomCount > 10 || snapshot.settings?.method === 'GFN2-xTB'} queue={input => void command('start_dynamics', { input })} />
         <div className="calculation-actions">
           <span className="job-status" role="status">{result ? t.succeeded : t.noResult}</span>
         </div>
@@ -154,8 +159,15 @@ function App() {
             <RefinementQueue key={result.job_id} locale={snapshot.locale} disabled={locked} queue={(method, basis) => void command('start_refinement', { id: result.job_id, method, basis })} /> : null}
           {result.refinement ? <RefinementComparison report={result.refinement} basis={result.basis} locale={snapshot.locale} /> : null}
           {result.thermochemistry ? <Thermochemistry report={result.thermochemistry} locale={snapshot.locale} /> : null}
+          {result.transition?.imaginary_count === 1 && result.method === 'RHF' && snapshot.atomCount <= 10
+            && result.transition.branches.some(branch => branch.match === 'reactant')
+            && result.transition.branches.some(branch => branch.match === 'product') ?
+            <SolutionQueue locale={snapshot.locale} title={solutionPathLabels[snapshot.locale].title} disabled={locked}
+              queue={solvent => void command('start_solution_path', { id: result.job_id, solvent })} /> : null}
+          {result.solution_path ? <SolutionBarriers report={result.solution_path} energy={result.energy_hartree} locale={snapshot.locale} /> : null}
+          {result.solution ? <SolutionDetails report={result.solution} locale={snapshot.locale} /> : null}
           {result.optimization ? <p className="job-status">{t.optimizeStructure} · ASE BFGS {result.optimization.ase_version} · {t.optimizationStep} {result.optimization.steps} · {t.maximumForce} {result.optimization.max_force_ev_per_angstrom.toPrecision(3)} eV/Å</p> : null}
-          <div className="method">{result.refinement ? `${refinementName(result.refinement.method)} / ${result.basis.toUpperCase()}` : result.settings ? conditionLabel(result.settings) : `${result.method} / ${result.basis.toUpperCase()}`}</div>
+          <div className="method">{result.dynamics ? `${ensembleName(result.dynamics.input.ensemble)} · ${conditionLabel(result.settings ?? defaultSettings)}` : result.refinement ? `${refinementName(result.refinement.method)} / ${result.basis.toUpperCase()}` : result.settings ? conditionLabel(result.settings) : `${result.method} / ${result.basis.toUpperCase()}`}</div>
           <span className="eyebrow">{result.neb ? `${t.reactant} · ${t.energy}` : t.energy}</span><div className="energy"><output>{result.energy_hartree.toFixed(10)}</output><span>Eh</span></div>
           <dl>{result.spin_squared !== undefined ? <div><dt>⟨S²⟩ <Info text={t.spinSquaredHelp} /></dt><dd>{result.spin_squared.toFixed(4)} / {(snapshot.spin * (snapshot.spin + 2) / 4).toFixed(4)}</dd></div> : null}<div><dt>{t.engine}</dt><dd>{result.method === 'GFN2-xTB' ? 'tblite' : 'PySCF'} {result.engine_version}</dd></div><div><dt>{t.elapsed}</dt><dd>{result.elapsed_seconds.toFixed(2)} s</dd></div></dl>
           <details><summary>{t.provenance}</summary><code>{result.job_id}</code><code>SHA-256 {result.input_hash}</code>{result.method === 'GFN2-xTB' ? <code>SCC ≤ 250 · {t.screeningAccuracy} 1.0 · 300 K</code> : result.settings ? <code>SCF ≤ {result.settings.max_cycle} · {result.settings.conv_tol.toExponential()} Eh{result.settings.grid_level ? ` · Grid ${result.settings.grid_level}` : ''}</code> : null}</details>

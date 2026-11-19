@@ -251,6 +251,15 @@ A thermal request freezes the optimized saddle and the two original mapped CI-NE
 
 The thermal worker optionally follows each gas-phase RRHO calculation with a self-consistent PySCF C-PCM or IEF-PCM single point at the same geometry. It adds the PCM minus gas electronic-energy difference to gas-phase Gibbs energy. Water and acetonitrile use fixed dielectric constants. The receipt-backed HDF5 stores PCM and cavity parameters plus the per-species electronic energies. An optional molar standard state adds RT ln(C°RT/p°) per species to both environments; the shift cancels for barriers defined between one registered species and one saddle. Existing reports without environment fields deserialize as gas phase at 1 atm.
 
+The solution CLI and scheduled desktop job share the same implementation. It reuses the PCM setup and converged SCF gradient adapter for ASE BFGS. It computes a PySCF solvent Hessian at the relaxed geometry and writes the signed projected vibrational frequencies, coordinates, original input and method provenance to HDF5. Its minimum diagnostic requires converged forces and all projected vibrational frequencies above the soft-mode threshold. The desktop job stores a solvent input in the queue and emits optimization steps plus a Hessian stage. Restoring the verified receipt loads the optimized geometry into the Rust document for wgpu rendering. The WebView receives only the frequency and convergence summary.
+
+The solution-path CLI uses the mapped transition request to seed two PCM minima and a PCM saddle. The same self-consistent solvent adapter supplies gradients along both IRC directions. Electronic barriers require two confirmed minima, a first-order saddle without soft modes, and distinct matches to the relaxed endpoints. The HDF5 artifact retains the seed request, the three relaxed structures, Hessians and both IRC trajectories.
+
+The desktop solution path request is derived from a verified gas saddle and its original CI-NEB receipt. It preserves the electronic settings, mapped endpoint geometries and gas reference energies. Phase progress and cancellation use the existing scheduler. The result receipt binds the IRC binary through its digest in result JSON. The shared Rust path preview reads the verified coordinate frames and renders the chosen frame with wgpu. The WebView receives scalar diagnostics, branch lengths and energies.
+
+
+
+
 
 ## Eyring rate comparison
 
@@ -260,3 +269,7 @@ Rust restores up to two thermal receipts and derives activation Gibbs energies f
 ## Correlated electronic refinement
 
 A verified IRC-connected singlet transition and its CI-NEB source provide fixed reactant, product and saddle geometries. Rust snapshots original method, engine, source identities and three electronic energies in the refinement input. The bounded PySCF Worker performs independent all-electron RHF and MP2 or CCSD plus perturbative triples calculations on each geometry, retaining the correlated, reference and triples energies with HDF5 provenance. The result contains no correlated gradient or thermal corrections. Rust validates the echoed baseline and the saved result before the WebView derives both barrier differences.
+
+## Molecular dynamics
+
+The scheduler runs bounded NVE or Langevin jobs with PySCF gradients and ASE integration. The Worker reports completed steps through JSONL and stores the trajectory and diagnostics in the checksummed HDF5 artifact. A little-endian coordinate file supports native playback without adding an HDF5 dependency to Rust. Its SHA-256 is bound to the catalog receipt through the verified result JSON. Rust validates its frame count, size, checksum, and geometries on completion and restore, then caches a single trajectory for playback. WebView requests carry the job ID, document revision, and frame index. The renderer uses the existing native wgpu path preview with fixed bounds over the trajectory.

@@ -1,6 +1,7 @@
 pub mod barriers;
 pub mod catalog;
 pub mod document;
+pub mod dynamics;
 mod editor;
 pub mod fields;
 pub mod jobs;
@@ -14,6 +15,8 @@ pub mod refinement;
 pub mod renderer;
 pub mod scheduler;
 pub mod settings;
+pub mod solution;
+pub mod solution_path;
 pub mod state;
 pub mod structure;
 pub mod thermochemistry;
@@ -227,6 +230,59 @@ fn start_calculation(
 }
 
 #[tauri::command]
+async fn start_solution_path(
+    app: tauri::AppHandle,
+    id: String,
+    expected_revision: u64,
+    solvent: thermochemistry::Solvent,
+) -> Result<WorkspaceSnapshot, String> {
+    queue_verified_job(app, expected_revision, move |store| {
+        solution_path::from_transition(store, &id, expected_revision, solvent)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn start_solution(
+    app: tauri::AppHandle,
+    expected_revision: u64,
+    solvent: thermochemistry::Solvent,
+) -> Result<WorkspaceSnapshot, String> {
+    let mut request = {
+        let state = app.state::<AppState>();
+        let workspace = state.0.lock().map_err(|_| "storage")?;
+        check_revision(&workspace, expected_revision)?;
+        JobRequest::with_settings(
+            workspace.project.document.clone().ok_or("no_document")?,
+            expected_revision,
+            workspace.project.settings.clone(),
+        )?
+    };
+    request.solution = Some(solvent);
+    queue_verified_job(app, expected_revision, move |_| Ok(request)).await
+}
+
+#[tauri::command]
+async fn start_dynamics(
+    app: tauri::AppHandle,
+    expected_revision: u64,
+    input: dynamics::Input,
+) -> Result<WorkspaceSnapshot, String> {
+    let mut request = {
+        let state = app.state::<AppState>();
+        let workspace = state.0.lock().map_err(|_| "storage")?;
+        check_revision(&workspace, expected_revision)?;
+        JobRequest::with_settings(
+            workspace.project.document.clone().ok_or("no_document")?,
+            expected_revision,
+            workspace.project.settings.clone(),
+        )?
+    };
+    request.dynamics = Some(input);
+    queue_verified_job(app, expected_revision, move |_| Ok(request)).await
+}
+
+#[tauri::command]
 async fn start_transition(
     app: tauri::AppHandle,
     id: String,
@@ -380,6 +436,9 @@ fn launch_calculation(
             && request.thermochemistry.is_none()
             && request.transition.is_none()
             && request.neb.is_none()
+            && request.dynamics.is_none()
+            && request.solution.is_none()
+            && request.solution_path.is_none()
             && (!request.optimize
                 || (matching_input && workspace.project.settings == request.effective_settings()))
         {
@@ -600,6 +659,7 @@ pub fn native_context() -> tauri::Context<tauri::Wry> {
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(dynamics::Playback::default())
         .manage(reaction::ReactionService::default())
         .manage(valence::ValenceService::default())
         .manage(structure::StructureService::default())
@@ -633,6 +693,10 @@ pub fn run() {
             reaction::capture_endpoint,
             reaction::save_atom_mapping,
             reaction::start_neb,
+            start_dynamics,
+            start_solution,
+            start_solution_path,
+            dynamics::show_frame,
             start_transition,
             start_thermochemistry,
             start_refinement,

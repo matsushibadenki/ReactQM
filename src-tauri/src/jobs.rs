@@ -40,6 +40,12 @@ pub struct JobRequest {
     pub thermochemistry: Option<crate::thermochemistry::Input>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refinement: Option<crate::refinement::Input>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamics: Option<crate::dynamics::Input>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solution: Option<crate::thermochemistry::Solvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solution_path: Option<crate::solution_path::Input>,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -47,6 +53,15 @@ fn is_false(value: &bool) -> bool {
 impl JobRequest {
     pub fn validate(&self) -> Result<(), String> {
         self.document.validate()?;
+        if let Some(input) = &self.solution_path {
+            if self.solution.is_some() {
+                return Err("solution_path_source".into());
+            }
+            input.validate(self)?;
+        }
+        if self.solution.is_some() {
+            crate::solution::validate(self)?;
+        }
         if self.optimize && self.document.atoms.len() < 2 {
             return Err("optimization_atoms".into());
         }
@@ -61,6 +76,9 @@ impl JobRequest {
         }
         if let Some(refinement) = &self.refinement {
             refinement.validate(self)?;
+        }
+        if let Some(input) = &self.dynamics {
+            input.validate(self)?;
         }
         let settings = self.effective_settings();
         settings.validate()?;
@@ -128,6 +146,22 @@ impl JobRequest {
             (None, None) => {}
             _ => return Err("result_invalid".into()),
         }
+        match (&self.dynamics, &result.dynamics) {
+            (Some(input), Some(report)) if input == &report.input && report.valid() => {}
+            (None, None) => {}
+            _ => return Err("result_invalid".into()),
+        }
+        if self.solution != result.solution.as_ref().map(|report| report.solvent) {
+            return Err("result_invalid".into());
+        }
+        match (&self.solution_path, &result.solution_path) {
+            (Some(input), Some(report))
+                if input.solvent == report.solvent
+                    && input.baseline == report.baseline
+                    && input.seed_image == report.saddle.seed_image => {}
+            (None, None) => {}
+            _ => return Err("result_invalid".into()),
+        }
         let document = self.result_document(result)?;
         result.validate(&document)?;
         if result.input_hash != self.input_hash
@@ -155,6 +189,12 @@ impl JobRequest {
     }
 
     pub fn result_document(&self, result: &Calculation) -> Result<Document, String> {
+        if let Some(report) = &result.solution_path {
+            return crate::neb::frame(&self.document, &report.saddle.positions_angstrom);
+        }
+        if let Some(report) = &result.solution {
+            return self.document_at(&report.positions_angstrom);
+        }
         if let Some(output) = &result.transition {
             return crate::neb::frame(&self.document, &output.positions_angstrom);
         }
@@ -218,6 +258,9 @@ impl JobRequest {
             transition: None,
             thermochemistry: None,
             refinement: None,
+            dynamics: None,
+            solution: None,
+            solution_path: None,
         }
     }
 }
@@ -362,7 +405,13 @@ pub fn execute(
                         cycle,
                     } if job_id == request.job_id
                         && cycle
-                            <= if request.optimize || request.neb.is_some() {
+                            <= if let Some(input) = &request.dynamics {
+                                input.steps
+                            } else if request.solution_path.is_some() {
+                                5
+                            } else if request.solution.is_some() {
+                                crate::solution::STEPS + 1
+                            } else if request.optimize || request.neb.is_some() {
                                 50
                             } else {
                                 request.max_cycle + 1
@@ -393,6 +442,7 @@ pub fn execute(
                                     | "transition_limit"
                                     | "transition_missing"
                                     | "solvent_not_converged"
+                                    | "solution_limit"
                                     | "refinement_scope"
                                     | "refinement_not_converged"
                             ) {
