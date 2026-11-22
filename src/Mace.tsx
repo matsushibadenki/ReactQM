@@ -15,9 +15,9 @@ const labels = {
 };
 
 const diagnosticLabels = {
-  en: { suspect: 'Possible extrapolation', clear: 'No warning indicators triggered', missing: 'Diagnostics unavailable for this result', close: 'Closest distance / summed covalent radii', bridge: 'Distance ratio needed for connectivity', disagreement: 'Small–medium force disagreement', unavailable: 'Medium checkpoint unavailable', help: 'Warnings trigger below 0.80 for the closest ratio, above 1.20 for the connectivity ratio, or above 0.50 eV/Å for maximum force disagreement. Model disagreement is an uncertainty indicator without calibration against prediction errors.' },
-  ja: { suspect: '外挿の疑い', clear: '警告条件に該当なし', missing: 'この結果には診断データがありません', close: '最短距離／共有結合半径の和', bridge: '連結に必要な距離比', disagreement: 'small／medium間の力の差', unavailable: 'mediumモデル未設定', help: '最短距離比が0.80未満、連結距離比が1.20超、または力の最大差が0.50 eV/Å超で警告します。モデル間の差は不確かさの指標で、予測誤差に対する校正は行っていません。' },
-  'zh-CN': { suspect: '疑似外推', clear: '未触发警告条件', missing: '该结果没有诊断数据', close: '最短距离／共价半径之和', bridge: '连通所需的距离比', disagreement: 'small 与 medium 的力差异', unavailable: '未配置 medium 模型', help: '最近距离比低于 0.80、连通距离比高于 1.20，或最大力差高于 0.50 eV/Å 时发出警告。模型差异是不确定性指标，尚未按预测误差校准。' },
+  en: { suspect: 'Possible extrapolation', clear: 'No warning indicators triggered', missing: 'Diagnostics unavailable for this result', close: 'Closest distance / summed covalent radii', bridge: 'Distance ratio needed for connectivity', disagreement: 'Small–medium force disagreement', unavailable: 'Medium checkpoint unavailable', help: 'Warnings trigger below 0.80 for the closest ratio, above 1.20 for the connectivity ratio, or above 0.50 eV/Å for maximum force disagreement. Model disagreement is an uncertainty indicator without calibration against prediction errors. A result with no warnings can still differ substantially from reference forces.' },
+  ja: { suspect: '外挿の疑い', clear: '警告条件に該当なし', missing: 'この結果には診断データがありません', close: '最短距離／共有結合半径の和', bridge: '連結に必要な距離比', disagreement: 'small／medium間の力の差', unavailable: 'mediumモデル未設定', help: '最短距離比が0.80未満、連結距離比が1.20超、または力の最大差が0.50 eV/Å超で警告します。モデル間の差は不確かさの指標で、予測誤差に対する校正は行っていません。警告が出なくても参照力との差が大きい場合があります。' },
+  'zh-CN': { suspect: '疑似外推', clear: '未触发警告条件', missing: '该结果没有诊断数据', close: '最短距离／共价半径之和', bridge: '连通所需的距离比', disagreement: 'small 与 medium 的力差异', unavailable: '未配置 medium 模型', help: '最近距离比低于 0.80、连通距离比高于 1.20，或最大力差高于 0.50 eV/Å 时发出警告。模型差异是不确定性指标，尚未按预测误差校准。即使没有警告，预测力也可能与参考值相差较大。' },
 };
 
 function MaceDiagnostics({ value, locale }: { value?: Diagnostics; locale: Locale }) {

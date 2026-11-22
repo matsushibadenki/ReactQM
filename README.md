@@ -533,3 +533,32 @@ MACEの結果には、最短原子間距離を共有結合半径の和で割っ�
 公式の [MACE-OFF23-mediumチェックポイント](https://github.com/ACEsuit/mace-off/blob/main/mace_off23/MACE-OFF23_medium.model) の絶対パスを `REACTQM_MACE_MEDIUM_MODEL` に設定すると、同じ構造を両モデルで推論します。原子ごとの力ベクトル差のノルムから最大値とRMSを表示し、最大値が0.50 eV/Åを超える場合に警告します。設定なしでは幾何の診断のみを表示します。これらの閾値は探索用の目安です。モデル間の差を誤差範囲や信頼区間として扱うことはできません。
 
 評価セットは `worker/validation/mace_extrapolation.py` にあります。上記の任意依存を指定した `uv run` で、このスクリプトにsmall、mediumのモデルパスを順に渡すと、4分子の平衡近傍・圧縮・伸長構造を再評価できます。
+
+外挿指標と参照力の差を比較するには、同じMACE実行環境で次を実行します。中間的な変形も含む4分子・20構造を生成し、PBE0／def2-SVPの力との比較をJSONに出力します。警告閾値は既存の値を固定し、最大力差0.50 eV/Åを超えた構造に対する検出・見逃しを集計します。
+
+```sh
+uv run --project worker --locked --with mace-torch==0.3.14 --with torch==2.9.1 \
+  python worker/validation/mace_reference.py MACE-OFF23_small.model MACE-OFF23_medium.model
+```
+
+この参照はMACE-OFF23の学習時と異なる電子状態計算条件です。比較値には手法差が含まれます。
+
+学習時と同じ参照条件で警告を評価するには、[MACE-OFF23公式テストセット](https://doi.org/10.17863/CAM.107498)の `test_large_neut_all.tar.gz` を取得し、`test_large_neut_all.xyz` を展開します。次のコマンドはアプリが受理する構造から固定シードで抽出し、公式参照力と同一座標のsmall／medium実推論を比較します。
+
+```sh
+uv run --project worker --locked --with mace-torch==0.3.14 --with torch==2.9.1 \
+  python worker/validation/mace_heldout.py test_large_neut_all.xyz \
+  MACE-OFF23_small.model MACE-OFF23_medium.model --samples 128 --seed 7127
+```
+
+出力JSONには入力・モデルのハッシュ、抽出したフレーム番号、除外理由、力の誤差、警告の混同行列を記録します。結果は指定した標本と最大原子力誤差0.50 eV/Åという判定基準に対応します。
+
+分子ごとに分離して閾値を検証するには、同じ公式XYZを使って次を実行します。原子マップと立体表記を除いた分子IDで校正・検証を分け、データ種別と短距離・長距離の幾何フラグごとに抽出します。最大原子力誤差0.50 eV/Åを判定基準とし、校正側の感度と特異度の平均で候補を選び、検証側では既存閾値と選定候補を比較します。
+
+```sh
+uv run --project worker --locked --with mace-torch==0.3.14 --with torch==2.9.1 \
+  python worker/validation/mace_calibration.py test_large_neut_all.xyz \
+  MACE-OFF23_small.model MACE-OFF23_medium.model --per-stratum 8 --seed 5041
+```
+
+集計は層別サンプル上の値です。実利用での警告頻度や信頼区間としては使用できません。
