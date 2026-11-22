@@ -6,6 +6,7 @@ from .calculation import evaluate
 PRESSURE = 101325.0
 FMAX = 0.03
 MODE_CUTOFF = 20.0
+QRRHO_REFERENCE_CM1 = 100.0
 SOLVENTS = {"water": 78.3553, "acetonitrile": 35.688}
 MODELS = {"c_pcm": "C-PCM", "ief_pcm": "IEF-PCM"}
 
@@ -50,17 +51,22 @@ def analyze(request, positions, temperature, saddle, conditions=None):
     solvers = []
     energy, gradient, _, spin_squared = evaluate(image, lambda _: None, on_converged=solvers.append)
     solver = solvers[0]
-    hessian = solver.Hessian().kernel()
-    modes = thermo.harmonic_analysis(solver.mol, hessian, imaginary_freq=True)
-    freq = modes["freq_au"]
-    signed = [float(-abs(value.imag) if value.imag else value.real) for value in modes["freq_wavenumber"]]
+    if len(document["atoms"]) == 1:
+        freq = np.array([], dtype=float)
+        signed = []
+    else:
+        hessian = solver.Hessian().kernel()
+        modes = thermo.harmonic_analysis(solver.mol, hessian, imaginary_freq=True)
+        freq = modes["freq_au"]
+        signed = [float(-abs(value.imag) if value.imag else value.real) for value in modes["freq_wavenumber"]]
     force = float(np.linalg.norm(gradient, axis=1).max() * units.Hartree / units.Bohr)
     stationary = force < FMAX and sum(value < -MODE_CUTOFF for value in signed) == int(saddle)
     # A soft or near-zero mode makes fixed RRHO unreliable. Preserve diagnostics.
     valid = stationary and all(abs(value) > MODE_CUTOFF for value in signed)
     corrections = None
     if valid:
-        thermal = thermo.thermo(solver, freq[freq.real > 0].real, temperature=temperature, pressure=PRESSURE)
+        thermal = thermo.thermo(solver, freq[freq.real > 0].real, temperature=temperature, pressure=PRESSURE,
+                                qrrho=conditions.get("quasi_rrho", False), qrrho_freq0=QRRHO_REFERENCE_CM1)
         zpe, gibbs = (float(thermal[key][0]) for key in ("ZPE", "G_tot"))
         if math.isfinite(zpe) and math.isfinite(gibbs):
             corrections = {"zpe_hartree": zpe, "gibbs_hartree": gibbs + standard_shift(temperature, conditions.get("standard_state"))}

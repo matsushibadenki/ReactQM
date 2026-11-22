@@ -1,5 +1,7 @@
 """Diagnostics and the versioned local calculation protocol."""
 import argparse
+import contextlib
+import sys
 import importlib
 import importlib.metadata
 import json
@@ -65,7 +67,7 @@ def smoke() -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ReactQM worker diagnostics")
-    parser.add_argument("command", choices=["doctor", "smoke", "calculate", "valence", "structure", "optimize", "field", "dynamics", "solution", "solution-path"])
+    parser.add_argument("command", choices=["doctor", "smoke", "calculate", "valence", "structure", "optimize", "field", "dynamics", "solution", "solution-path", "stoichiometry", "mace", "mace-scope"])
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--fmax", type=float, default=0.05)
@@ -77,7 +79,33 @@ def main() -> None:
     parser.add_argument("--ensemble", choices=["nve", "langevin"], default="nve")
     parser.add_argument("--solvent-model", choices=["c_pcm", "ief_pcm"], default="c_pcm")
     parser.add_argument("--solvent", choices=["water", "acetonitrile"], default="water")
+    parser.add_argument("--model-path", type=Path)
     args = parser.parse_args()
+    if args.command in ("mace", "mace-scope"):
+        from .mace_potential import evaluate, scope
+
+        if args.command == "mace-scope":
+            print(json.dumps(scope()))
+            return
+        if args.input is None or args.model_path is None:
+            parser.error("mace requires --input and --model-path")
+        try:
+            with contextlib.redirect_stdout(sys.stderr):
+                result = evaluate(args.input, args.model_path)
+            print(json.dumps(result, allow_nan=False))
+        except Exception as error:
+            parser.exit(1, f"MACE calculation failed: {error}\n")
+        return
+    if args.command == "stoichiometry":
+        if args.input is None:
+            parser.error("stoichiometry requires --input")
+        from .stoichiometry import compare
+
+        try:
+            print(json.dumps(compare(args.input), allow_nan=False))
+        except Exception as error:
+            parser.exit(1, f"Stoichiometry calculation failed: {error}\n")
+        return
     if args.command in ("solution", "solution-path"):
         if args.input is None or args.output_dir is None or args.resume:
             parser.error(f"{args.command} requires --input and a fresh --output-dir")

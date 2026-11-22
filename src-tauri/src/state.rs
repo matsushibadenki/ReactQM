@@ -66,6 +66,7 @@ pub struct WorkspaceSnapshot {
     pub locale: Locale,
     pub atom_count: usize,
     pub manual_bonds: bool,
+    pub mace_scope_error: Option<&'static str>,
     pub name: String,
     pub formula: String,
     pub charge: i32,
@@ -166,6 +167,7 @@ impl Workspace {
                     input_hash: s.input_hash.clone(),
                 }),
             manual_bonds: doc.is_some_and(|doc| doc.bonds.is_some()),
+            mace_scope_error: doc.and_then(|document| crate::mace::validate_scope(document).err()),
             atom_count: doc.map_or(0, |doc| doc.atoms.len()),
             name: doc.map_or_else(String::new, |doc| doc.name.clone()),
             formula: doc.map_or_else(String::new, |doc| doc.formula()),
@@ -180,6 +182,9 @@ impl Workspace {
                 .map_or(doc.is_some(), |saved| saved != &self.project),
             has_saved: self.saved_available,
             calculation: self.project.calculation.clone().map(|mut result| {
+                if let Some(report) = &mut result.mace {
+                    report.forces_ev_per_angstrom.clear();
+                }
                 if let Some(path) = &mut result.solution_path {
                     path.saddle.positions_angstrom.clear();
                 }
@@ -261,6 +266,8 @@ mod tests {
             dynamics: None,
             solution: None,
             solution_path: None,
+            stoichiometry: None,
+            mace: None,
             settings: None,
             job_id: id.clone(),
             input_hash: document.fingerprint(),

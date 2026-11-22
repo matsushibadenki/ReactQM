@@ -347,3 +347,8 @@ main { padding-top: 0; }
 .dynamics-fields label { display: grid; gap: 4px; min-width: 0; }
 .dynamics-fields input, .dynamics-fields select { width: 100%; min-width: 0; }
 .dynamics-transport { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+
+.stoichiometry-form, .stoichiometry-form fieldset { min-inline-size: 0; border: 0; padding: 0; }
+.stoichiometry-form label { display: grid; gap: 4px; }
+.stoichiometry-term { display: grid; grid-template-columns: minmax(0, 1fr) 4rem auto; gap: 6px; margin-bottom: 4px; }
+.stoichiometry-term select, .stoichiometry-term input, .stoichiometry-form select { width: 100%; min-width: 0; }

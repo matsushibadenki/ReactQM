@@ -3,7 +3,7 @@ import { messages, type Locale } from './i18n';
 
 type StandardState = 'atmosphere' | 'molar';
 type Solvent = { model: 'c_pcm' | 'ief_pcm'; medium: 'water' | 'acetonitrile' };
-type ThermalConditions = { temperatureKelvin: number; standardState: StandardState; solvent: Solvent | null };
+type ThermalConditions = { temperatureKelvin: number; standardState: StandardState; solvent: Solvent | null; quasiRrho: boolean };
 
 type Species = {
   electronic_hartree: number;
@@ -19,6 +19,7 @@ export type ThermalReport = {
   standard_state?: StandardState;
   standard_shift_hartree?: number;
   solvent?: Solvent;
+  quasi_rrho?: boolean;
   reactant: Species;
   product: Species;
   saddle: Species;
@@ -28,9 +29,11 @@ export function ThermalQueue({ locale, disabled, onQueue }: { locale: Locale; di
   const t = messages[locale];
   const [temperature, setTemperature] = useState('298.15');
   const [standardState, setStandardState] = useState<StandardState>('atmosphere');
+  const [quasiRrho, setQuasiRrho] = useState(false);
+  const entropy = { en: 'Vibrational entropy', ja: '振動エントロピー', 'zh-CN': '振动熵' }[locale];
   const [model, setModel] = useState<Solvent['model'] | ''>('');
   const [medium, setMedium] = useState<Solvent['medium']>('water');
-  return <form className="thermal-queue" onSubmit={event => { event.preventDefault(); onQueue({ temperatureKelvin: Number(temperature), standardState, solvent: model ? { model, medium } : null }); }}>
+  return <form className="thermal-queue" onSubmit={event => { event.preventDefault(); onQueue({ temperatureKelvin: Number(temperature), standardState, quasiRrho, solvent: model ? { model, medium } : null }); }}>
     <label>{t.thermalTemperature} (K) <input type="number" min="1" max="2000" step="any" required value={temperature} onChange={event => setTemperature(event.target.value)} /></label>
     <label>{t.solventStandardState} <select value={standardState} onChange={event => setStandardState(event.target.value as StandardState)}>
       <option value="atmosphere">1 atm</option><option value="molar">1 M</option>
@@ -41,6 +44,9 @@ export function ThermalQueue({ locale, disabled, onQueue }: { locale: Locale; di
     {model ? <label>{t.solventMedium} <select value={medium} onChange={event => setMedium(event.target.value as typeof medium)}>
       <option value="water">{t.solventWater}</option><option value="acetonitrile">{t.solventAcetonitrile}</option>
     </select></label> : null}
+    <label>{entropy} <select value={quasiRrho ? 'quasi' : 'rrho'} onChange={event => setQuasiRrho(event.target.value === 'quasi')}>
+      <option value="rrho">RRHO</option><option value="quasi">Grimme quasi-RRHO · 100 cm⁻¹</option>
+    </select></label>
     <button type="submit" disabled={disabled}>{t.queueThermal}</button>
   </form>;
 }
@@ -66,7 +72,7 @@ export function Thermochemistry({ report, locale }: { report: ThermalReport; loc
   const t = messages[locale];
   return <section className="thermal-results">
     <strong>{t.thermalTitle} · {report.temperature_kelvin} K</strong>
-    <p>RRHO · {report.standard_state === 'molar' ? '1 M' : '1 atm'}
+    <p>{report.quasi_rrho ? 'Grimme quasi-RRHO · 100 cm⁻¹' : 'RRHO'} · {report.standard_state === 'molar' ? '1 M' : '1 atm'}
       {report.solvent ? ` · ${report.solvent.model === 'c_pcm' ? 'C-PCM' : 'IEF-PCM'} / ${report.solvent.medium === 'water' ? t.solventWater : t.solventAcetonitrile}` : ''}
     </p>
     <table>

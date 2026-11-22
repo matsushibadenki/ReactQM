@@ -198,20 +198,22 @@ pub fn run_claimed(
         directory,
         config,
         cancel.clone(),
-        Duration::from_secs(if request.solution_path.is_some() {
-            1800
-        } else if request.optimize
-            || request.neb.is_some()
-            || request.transition.is_some()
-            || request.thermochemistry.is_some()
-            || request.refinement.is_some()
-            || request.dynamics.is_some()
-            || request.solution.is_some()
-        {
-            600
-        } else {
-            120
-        }),
+        Duration::from_secs(
+            if request.solution_path.is_some() || request.stoichiometry.is_some() {
+                1800
+            } else if request.optimize
+                || request.neb.is_some()
+                || request.transition.is_some()
+                || request.thermochemistry.is_some()
+                || request.refinement.is_some()
+                || request.dynamics.is_some()
+                || request.solution.is_some()
+            {
+                600
+            } else {
+                120
+            },
+        ),
         progress,
     );
     let result = if cancel.load(Ordering::SeqCst) {

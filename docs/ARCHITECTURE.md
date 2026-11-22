@@ -246,6 +246,15 @@ The comparison command restores up to two verified path or transition receipts. 
 
 A thermal request freezes the optimized saddle and the two original mapped CI-NEB endpoint geometries from verified receipts. The Worker runs analytic PySCF frequency analyses at the fixed geometries with the same electronic settings. Thermochemistry uses ideal-gas RRHO at 101325 Pa and the requested temperature. Endpoints require zero imaginary modes, the saddle requires one, and all structures must pass force and soft-mode checks before publishing corrections. The receipt-backed HDF5 and report retain the criteria, temperature, per-structure frequencies, zero-point and Gibbs energies, and source identity. Each reported directional barrier requires an eligible saddle and its corresponding endpoint.
 
+An optional request flag selects the PySCF Grimme quasi-RRHO vibrational entropy with a reference frequency of 100 cm⁻¹. The receipt binds the entropy model to the result and HDF5 provenance. Harmonic ZPE, vibrational enthalpy and stationary-point criteria apply in both models.
+
+The stoichiometry CLI reads a reaction manifest and bounded single-point requests, verifies balanced elements and charge, and runs gas thermochemistry once per unique species and stationarity role. It sums 1 atm Gibbs energies by coefficient and applies the species-count difference to convert each reaction or activation energy to 1 M. The JSON records input hashes, stationary-point diagnostics, engine settings, species counts and both standard states.
+
+The desktop workflow freezes geometries, stoichiometric coefficients, common electronic settings and job IDs from verified history receipts. The Worker uses the same evaluator as the CLI. Its HDF5 artifact stores per-species results and input hashes, while the WebView receives the reaction summary and both standard-state energy rows. The Rust receipt check binds the summary to the saved source selection and verifies the conversion and forward/reverse thermodynamic identity.
+
+
+
+
 
 ## Solvent and standard state
 
@@ -273,3 +282,12 @@ A verified IRC-connected singlet transition and its CI-NEB source provide fixed 
 ## Molecular dynamics
 
 The scheduler runs bounded NVE or Langevin jobs with PySCF gradients and ASE integration. The Worker reports completed steps through JSONL and stores the trajectory and diagnostics in the checksummed HDF5 artifact. A little-endian coordinate file supports native playback without adding an HDF5 dependency to Rust. Its SHA-256 is bound to the catalog receipt through the verified result JSON. Rust validates its frame count, size, checksum, and geometries on completion and restore, then caches a single trajectory for playback. WebView requests carry the job ID, document revision, and frame index. The renderer uses the existing native wgpu path preview with fixed bounds over the trajectory.
+
+## Optional machine-learning potential
+
+The MACE Worker CLI is an opt-in CPU adapter for the pinned official MACE-OFF23-small checkpoint. It validates the declared molecular scope and coarse geometry before importing the inference stack. The adapter hashes a bounded checkpoint read and deserializes a private copy of the verified bytes. Results retain model and input hashes, runtime versions and explicit prediction units. Scope validation is distinct from statistical uncertainty estimation.
+
+
+The desktop app runs the same molecular scope checks in Rust before enqueue and repeats them in the Worker before checkpoint loading. The scheduler uses an optional separate Python interpreter for MACE and preserves the existing Worker for other methods. The catalog verifies the result JSON and HDF5 receipt on restore. Workspace snapshots expose energy and model metadata. The force command returns only the chosen atom’s vector from Rust-owned state.
+
+MACE result schema v1 diagnostics retain the closest normalized distance and the minimum normalized connection threshold over the entire molecule, with atom pairs for both values. The optional pinned medium checkpoint adds the RMS and maximum norm of per-atom force differences. The result JSON and HDF5 retain these scalars and checkpoint identity. Desktop warnings use documented heuristic thresholds, and old results without diagnostics remain restorable.

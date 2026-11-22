@@ -1,3 +1,5 @@
+import { MaceDetails, MaceQueue, type MaceReport } from './Mace';
+import { StoichiometryResult, type StoichiometryReport } from './Stoichiometry';
 import { SolutionBarriers, solutionPathLabels } from './SolutionPath';
 import { SolutionDetails, SolutionQueue, type SolutionReport } from './Solution';
 import { DynamicsQueue, ensembleName } from './Dynamics';
@@ -23,11 +25,11 @@ type Transition = {
   source_job: string; seed_image: number; sella_version: string; steps: number; imaginary_count: number; frequencies_cm1: number[];
   branches: { converged: boolean; match: 'reactant' | 'product' | null; reactant_rmsd_angstrom: number; product_rmsd_angstrom: number; max_force_ev_per_angstrom: number; steps: number }[];
 };
-type Calculation = FieldResult & { input_hash: string; basis: string; energy_hartree: number; engine_version: string; elapsed_seconds: number; converged: boolean; settings?: Settings; transition?: Transition; thermochemistry?: ThermalReport; refinement?: RefinementReport; solution?: SolutionReport; spin_squared?: number; optimization?: { steps: number; max_force_ev_per_angstrom: number; ase_version: string } };
+type Calculation = FieldResult & { mace?: MaceReport; stoichiometry?: StoichiometryReport; input_hash: string; basis: string; energy_hartree: number; engine_version: string; elapsed_seconds: number; converged: boolean; settings?: Settings; transition?: Transition; thermochemistry?: ThermalReport; refinement?: RefinementReport; solution?: SolutionReport; spin_squared?: number; optimization?: { steps: number; max_force_ev_per_angstrom: number; ase_version: string } };
 type JobStatus = 'running' | 'cancelling' | 'succeeded' | 'cancelled' | 'failed' | 'timed_out' | 'interrupted' | 'corrupt';
 type InputFormat = 'xyz' | 'smiles' | 'sdf';
 type StructureSource = { format: string; method: 'etkdgv3' | 'sdf_3d'; seed: number | null; engineVersion: string; inputHash: string };
-type Snapshot = { revision: number; documentRevision: number; locale: Locale; atomCount: number; manualBonds: boolean; name: string; formula: string; charge: number; spin: number; rendererReady: boolean; canUndo: boolean; canRedo: boolean; dirty: boolean; hasSaved: boolean; calculation: Calculation | null; job: { id: string; status: JobStatus; cycle: number; error: string | null } | null; busy: boolean; structureSource: StructureSource | null; settings: Settings };
+type Snapshot = { revision: number; documentRevision: number; locale: Locale; atomCount: number; manualBonds: boolean; maceScopeError?: string | null; name: string; formula: string; charge: number; spin: number; rendererReady: boolean; canUndo: boolean; canRedo: boolean; dirty: boolean; hasSaved: boolean; calculation: Calculation | null; job: { id: string; status: JobStatus; cycle: number; error: string | null } | null; busy: boolean; structureSource: StructureSource | null; settings: Settings };
 const initial: Snapshot = { revision: 0, documentRevision: 0, locale: 'ja', atomCount: 0, manualBonds: false, name: '', formula: '', charge: 0, spin: 0, rendererReady: false, canUndo: false, canRedo: false, dirty: false, hasSaved: false, calculation: null, job: null, busy: false, structureSource: null, settings: defaultSettings };
 const native = isTauri();
 const windowPanel: PanelId | null = native && getCurrentWindow().label === 'panel-result' ? 'result' : native && getCurrentWindow().label === 'panel-history' ? 'history' : null;
@@ -128,7 +130,7 @@ function App() {
 
   const moleculePanel = (      <section aria-labelledby="molecule-title">
         <div className="heading"><h2 id="molecule-title">{t.molecule}</h2>{snapshot.dirty ? <span className="dirty" aria-label={t.unsaved} title={t.unsaved}>●</span> : null}</div>
-        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} manualBonds={snapshot.manualBonds} result={result?.transition || result?.thermochemistry || result?.refinement || result?.solution ? null : result} editingDisabled={locked} onEdit={edit => void command('edit_molecule', { edit })} />
+        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} manualBonds={snapshot.manualBonds} result={result?.transition || result?.thermochemistry || result?.refinement || result?.solution || result?.stoichiometry || result?.mace ? null : result} editingDisabled={locked} onEdit={edit => void command('edit_molecule', { edit })} />
         <div className="molecule-summary"><strong className="formula">{snapshot.formula || '—'}</strong><span>{snapshot.atomCount ? snapshot.name || t.untitled : t.empty}</span></div>
         <dl className="metrics"><div><dt>{t.atoms}</dt><dd>{snapshot.atomCount}</dd></div><div><dt>{t.charge} <Info text={t.chargeHelp} /></dt><dd>{snapshot.charge === 0 ? `0 · ${t.neutral}` : snapshot.charge > 0 ? `+${snapshot.charge}` : `−${Math.abs(snapshot.charge)}`}</dd></div><div><dt>{t.spin} <Info text={t.spinHelp} /></dt><dd>{snapshot.atomCount ? snapshot.spin + 1 : '—'}</dd></div></dl>
         {snapshot.atomCount ? <form key={snapshot.documentRevision} className="input-row multiplicity-editor" onSubmit={event => {
@@ -146,12 +148,13 @@ function App() {
       </section>);
   const panels = {
     result: <><div className="result-help"><Info text={(result?.method ?? snapshot.settings?.method) === 'GFN2-xTB' ? t.screeningHelp : t.calculationHelp} /></div>        <CalculationControls settings={snapshot.settings ?? defaultSettings} locale={snapshot.locale} spin={snapshot.spin} disabled={locked} onChange={settings => void command('set_calculation_settings', { settings })} />
+        <MaceQueue locale={snapshot.locale} scopeError={snapshot.maceScopeError} disabled={locked || snapshot.atomCount === 0} queue={() => void command('start_mace', {})} />
         <SolutionQueue locale={snapshot.locale} disabled={locked || snapshot.atomCount < 2 || snapshot.atomCount > 10 || snapshot.spin !== 0 || snapshot.settings?.method !== 'RHF'} queue={solvent => void command('start_solution', { solvent })} />
         <DynamicsQueue locale={snapshot.locale} disabled={locked || snapshot.atomCount < 2 || snapshot.atomCount > 10 || snapshot.settings?.method === 'GFN2-xTB'} queue={input => void command('start_dynamics', { input })} />
         <div className="calculation-actions">
           <span className="job-status" role="status">{result ? t.succeeded : t.noResult}</span>
         </div>
-        {result ? <div className="result">
+        {result?.mace ? <MaceDetails key={result.job_id} report={result.mace} locale={snapshot.locale} jobId={result.job_id} atomCount={snapshot.atomCount} revision={snapshot.documentRevision} engineVersion={result.engine_version} /> : result?.stoichiometry ? <StoichiometryResult locale={snapshot.locale} report={result.stoichiometry} /> : result ? <div className="result">
           {result.transition ? <TransitionDetails result={result.transition} locale={snapshot.locale} /> : null}
           {result.transition?.imaginary_count === 1 && result.transition.branches.some(branch => branch.match === 'reactant') && result.transition.branches.some(branch => branch.match === 'product') ?
             <ThermalQueue key={result.job_id} locale={snapshot.locale} disabled={locked} onQueue={conditions => void command('start_thermochemistry', { id: result.job_id, ...conditions })} /> : null}

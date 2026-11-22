@@ -41,6 +41,8 @@ pub struct JobRecord {
     pub dynamics: Option<crate::dynamics::Input>,
     pub solution: Option<crate::thermochemistry::Solvent>,
     pub solution_path: Option<crate::thermochemistry::Solvent>,
+    pub stoichiometry: bool,
+    pub mace: bool,
     pub multiplicity: Option<u32>,
     pub resumable: bool,
     pub sequence: i64,
@@ -72,6 +74,8 @@ pub struct QueueItem {
     pub dynamics: Option<crate::dynamics::Input>,
     pub solution: Option<crate::thermochemistry::Solvent>,
     pub solution_path: Option<crate::thermochemistry::Solvent>,
+    pub stoichiometry: bool,
+    pub mace: bool,
     pub multiplicity: Option<u32>,
     pub settings: Option<crate::settings::CalculationSettings>,
     pub sequence: i64,
@@ -340,12 +344,21 @@ impl Catalog {
                 name: row.get(2)?,
                 formula: row.get(3)?,
                 status: row.get(4)?,
-                settings: request.as_ref().map(JobRequest::effective_settings),
+                settings: request
+                    .as_ref()
+                    .filter(|job| job.method != crate::mace::METHOD)
+                    .map(JobRequest::effective_settings),
                 neb: request
                     .as_ref()
                     .and_then(|job| job.neb.as_ref().map(|path| path.climb)),
                 dynamics: request.as_ref().and_then(|job| job.dynamics.clone()),
                 solution: request.as_ref().and_then(|job| job.solution),
+                mace: request
+                    .as_ref()
+                    .is_some_and(|job| job.method == crate::mace::METHOD),
+                stoichiometry: request
+                    .as_ref()
+                    .is_some_and(|job| job.stoichiometry.is_some()),
                 solution_path: request
                     .as_ref()
                     .and_then(|job| job.solution_path.as_ref().map(|path| path.solvent)),
@@ -501,6 +514,12 @@ impl Catalog {
                     neb,
                     dynamics: request.as_ref().and_then(|job| job.dynamics.clone()),
                     solution: request.as_ref().and_then(|job| job.solution),
+                    mace: request
+                        .as_ref()
+                        .is_some_and(|job| job.method == crate::mace::METHOD),
+                    stoichiometry: request
+                        .as_ref()
+                        .is_some_and(|job| job.stoichiometry.is_some()),
                     solution_path: request
                         .as_ref()
                         .and_then(|job| job.solution_path.as_ref().map(|path| path.solvent)),
@@ -521,7 +540,10 @@ impl Catalog {
                     energy_hartree: row.get(7)?,
                     retry_of: row.get(8)?,
                     legacy: row.get(9)?,
-                    settings: request.as_ref().map(JobRequest::effective_settings),
+                    settings: request
+                        .as_ref()
+                        .filter(|job| job.method != crate::mace::METHOD)
+                        .map(JobRequest::effective_settings),
                     multiplicity: request.map(|job| job.document.spin + 1),
                 })
             })
@@ -1000,6 +1022,8 @@ mod tests {
             dynamics: None,
             solution: None,
             solution_path: None,
+            stoichiometry: None,
+            mace: None,
             settings: None,
             job_id: request.job_id.clone(),
             input_hash: request.input_hash.clone(),

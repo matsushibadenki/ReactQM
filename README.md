@@ -232,11 +232,40 @@ English: Queue transition verification from a completed CI-NEB job, then restore
 
 `npm run test:thermochemistry` は実CI-NEB・IRCから診断付き結果を保存・復元する統合検証です。HCN／HNCの正逆障壁と温度依存性はWorkerの実計算テストで検証します。
 
+熱化学の「振動エントロピー」では、従来のRRHOとGrimme quasi-RRHO（基準100 cm⁻¹）を選択できます。補正は振動エントロピーに適用します。ZPEと振動エンタルピーには調和振動数を使い、極小・鞍点の採用基準は共通です。選択したモデルは熱化学結果と速度比較に表示されます。
+
 ## 溶媒モデルと標準状態
 
 熱化学ジョブの投入時に、標準状態を1 atm／1 Mから、溶媒モデルを気相／C-PCM／IEF-PCMから選択します。PCMの溶媒は水とアセトニトリルです。PCMを選んだ結果には、同じ標準状態と温度で気相・溶液のGibbs障壁が正逆方向で並びます。
 
 溶液値は気相構造のPCM単一点エネルギーに気相RRHO熱補正を加えた近似です。溶液中での再最適化、溶液ヘッセ行列、非静電的溶媒和項は含みません。1 atmから1 Mへは各化学種のGに RT ln(C°RT/p°) を加えます。各側を単一化学種として扱う現行経路では、この項は障壁差で相殺されます。温度、標準状態、溶媒、誘電率、PCM設定と気相・溶媒中のエネルギーを成果物に保存します。
+
+### 多化学種の標準状態換算
+
+計算履歴の「多化学種の熱化学」を開き、完了済みの気相ジョブから反応物・生成物を選んで係数を指定します。必要に応じて鞍点ジョブを選び、温度と振動エントロピーのモデルを設定して待機列に追加します。完了後に履歴から復元すると、計算パネルで反応式と1 atm／1 Mの反応・正逆活性化自由エネルギーを比較できます。
+
+各側1〜8項、各係数1〜16、化学種当たり1〜16原子が対象です。全化学種で電子状態計算の設定を揃えます。鞍点を省略した場合は反応自由エネルギーを比較できます。指定した鞍点と端点の経路接続は別途IRCで確認してください。
+
+#### Worker CLI
+
+気相の最適化済み化学種を個別のPySCF単一点ジョブ入力として用意し、化学量論をJSONで指定します。パスはマニフェストからの相対パスです。以下は同じ組成を両側に持つ交換反応の指定例です。
+
+```json
+{
+  "temperature_kelvin": 298.15,
+  "reactants": [{"input": "H.json", "coefficient": 1}, {"input": "H2.json", "coefficient": 1}],
+  "products": [{"input": "H2.json", "coefficient": 1}, {"input": "H.json", "coefficient": 1}],
+  "saddle": "H3-saddle.json"
+}
+```
+
+```sh
+uv run --project worker --locked python -m reactqm_worker stoichiometry --input reaction.json > comparison.json
+```
+
+元素数・電荷の保存と共通の電子状態計算条件を検証します。各化学種を独立に振動数解析し、1 atmと1 Mで、反応自由エネルギーと指定した鞍点の正逆の活性化自由エネルギーをkJ/molで出力します。鞍点を省略すると反応自由エネルギーのみを出力します。鞍点は一次鞍点の振動数基準を満たす必要があり、経路の接続は別途IRCで確認してください。
+
+1 Mへの補正は化学種1モル当たり `RT ln(C°RT/p°)` です。反応には生成物と反応物の係数和の差、障壁には鞍点1から各側の係数和を引いた値を掛けます。RRHOを既定とし、`"quasi_rrho": true` で振動エントロピー補正を選択できます。
 
 ### 溶液中の構造最適化・振動数
 
@@ -467,3 +496,40 @@ uv run --project worker --locked python -m reactqm_worker dynamics \
 ```
 
 `nve` は温度を初期運動量のサンプリングに使用します。`langevin` は同じ温度をサーモスタットの目標値にも使用し、摩擦係数は0.02 fs⁻¹です。瞬間温度は並進・回転を含む全自由度から求めます。時間刻みは0.05〜2 fs、実行は1〜500ステップです。軌跡と入力・エンジン情報は `trajectory.h5`、温度とNVEのエネルギー偏差は `dynamics-result.json` に保存します。
+
+## MACE-OFF23ポテンシャル
+
+計算パネルの「MACE-OFF23-small」を開くと、対応元素・電荷・スピンと現在の入力の判定が表示されます。範囲外では待機列への追加が無効になります。完了後に履歴から復元し、エネルギー（eV）と選択した原子の力のXYZ成分（eV/Å）を確認できます。
+
+開発版を起動する前に、`REACTQM_MACE_MODEL` に公式チェックポイントの絶対パス、`REACTQM_MACE_PYTHON` にMACEとPyTorchを含むPythonの絶対パスを設定します。後者を省略すると既存WorkerのPythonを使います。MACE専用の一時環境で起動する例です。
+
+```sh
+export REACTQM_MACE_MODEL=/absolute/path/to/MACE-OFF23_small.model
+uv run --project worker --locked --with mace-torch==0.3.14 --with torch==2.9.1 \
+  python -c 'import os, sys; os.environ["REACTQM_MACE_PYTHON"] = sys.executable; os.execvp("npm", ["npm", "run", "tauri", "dev"])'
+```
+
+同じ環境変数で `npm run test:mace` を実行すると、公式モデルで待機列・履歴復元を検証できます。
+
+### Worker CLI
+
+公式の [MACE-OFF23-smallチェックポイント](https://github.com/ACEsuit/mace-off/blob/main/mace_off23/MACE-OFF23_small.model) を取得し、公開元のモデルライセンスを確認してください。WorkerはSHA-256で照合してから読み込みます。入力はReactQMのDocument JSONです。ジョブ入力の `input.json` を使う場合は、その中の `document` を取り出します。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker mace-scope
+uv run --project worker --locked --with mace-torch==0.3.14 --with torch==2.9.1 \
+  python -m reactqm_worker mace --input molecule.json --model-path MACE-OFF23_small.model \
+  > mace-result.json
+```
+
+学習領域はSPICE v1の中性閉殻有機化学です。アダプターはH、C、N、O、F、P、S、Cl、Br、Iの2〜64原子からなる、非周期・中性・一重項の単一分子を受け付けます。電荷、指定スピン、元素、電子数の偶奇、座標、原子の極端な接近・分離を推論前に検査します。適用範囲の検査は学習分布からの外れや予測誤差を定量化しません。反応経路・結合の生成や解離、開殻性を持つ一重項の評価には使わないでください。
+
+CPU／float64で推論し、エネルギー（eV）、各原子の力（eV/Å）、モデル・入力のハッシュと実行環境のバージョンをJSONに出力します。
+
+### 外挿の疑いとモデル間の不一致
+
+MACEの結果には、最短原子間距離を共有結合半径の和で割った比と、全原子が連結になる最小の距離比を表示します。最短比が0.80未満、または連結に必要な比が1.20を超える場合に、該当原子の番号と警告を表示します。
+
+公式の [MACE-OFF23-mediumチェックポイント](https://github.com/ACEsuit/mace-off/blob/main/mace_off23/MACE-OFF23_medium.model) の絶対パスを `REACTQM_MACE_MEDIUM_MODEL` に設定すると、同じ構造を両モデルで推論します。原子ごとの力ベクトル差のノルムから最大値とRMSを表示し、最大値が0.50 eV/Åを超える場合に警告します。設定なしでは幾何の診断のみを表示します。これらの閾値は探索用の目安です。モデル間の差を誤差範囲や信頼区間として扱うことはできません。
+
+評価セットは `worker/validation/mace_extrapolation.py` にあります。上記の任意依存を指定した `uv run` で、このスクリプトにsmall、mediumのモデルパスを順に渡すと、4分子の平衡近傍・圧縮・伸長構造を再評価できます。

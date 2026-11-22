@@ -6,6 +6,7 @@ mod editor;
 pub mod fields;
 pub mod jobs;
 pub mod layout;
+pub mod mace;
 pub mod neb;
 pub mod panel_windows;
 pub mod project;
@@ -18,6 +19,7 @@ pub mod settings;
 pub mod solution;
 pub mod solution_path;
 pub mod state;
+pub mod stoichiometry;
 pub mod structure;
 pub mod thermochemistry;
 pub mod transition;
@@ -230,6 +232,83 @@ fn start_calculation(
 }
 
 #[tauri::command]
+async fn start_mace(
+    app: tauri::AppHandle,
+    expected_revision: u64,
+) -> Result<WorkspaceSnapshot, String> {
+    let request = {
+        let state = app.state::<AppState>();
+        let workspace = state.0.lock().map_err(|_| "storage")?;
+        check_revision(&workspace, expected_revision)?;
+        JobRequest::mace(
+            workspace.project.document.clone().ok_or("no_document")?,
+            expected_revision,
+        )?
+    };
+    queue_verified_job(app, expected_revision, move |_| {
+        if !std::env::var_os("REACTQM_MACE_MODEL")
+            .map(PathBuf::from)
+            .is_some_and(|path| path.is_absolute() && path.is_file())
+        {
+            return Err("mace_checkpoint_missing".into());
+        }
+        Ok(request)
+    })
+    .await
+}
+
+#[tauri::command]
+fn mace_force(
+    app: tauri::AppHandle,
+    expected_revision: u64,
+    job_id: String,
+    index: usize,
+) -> Result<[f64; 3], String> {
+    let state = app.state::<AppState>();
+    let workspace = state.0.lock().map_err(|_| "storage")?;
+    check_revision(&workspace, expected_revision)?;
+    workspace
+        .project
+        .calculation
+        .as_ref()
+        .filter(|result| result.job_id == job_id)
+        .and_then(|result| result.mace.as_ref())
+        .and_then(|report| report.forces_ev_per_angstrom.get(index))
+        .copied()
+        .ok_or_else(|| "result_invalid".into())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoichiometrySelection {
+    temperature_kelvin: f64,
+    quasi_rrho: bool,
+    reactants: Vec<stoichiometry::Selection>,
+    products: Vec<stoichiometry::Selection>,
+    saddle: Option<String>,
+}
+
+#[tauri::command]
+async fn start_stoichiometry(
+    app: tauri::AppHandle,
+    expected_revision: u64,
+    selection: StoichiometrySelection,
+) -> Result<WorkspaceSnapshot, String> {
+    queue_verified_job(app, expected_revision, move |store| {
+        stoichiometry::from_history(
+            store,
+            expected_revision,
+            selection.temperature_kelvin,
+            selection.quasi_rrho,
+            selection.reactants,
+            selection.products,
+            selection.saddle,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
 async fn start_solution_path(
     app: tauri::AppHandle,
     id: String,
@@ -331,6 +410,7 @@ async fn start_thermochemistry(
     temperature_kelvin: f64,
     standard_state: thermochemistry::StandardState,
     solvent: Option<thermochemistry::Solvent>,
+    quasi_rrho: Option<bool>,
 ) -> Result<WorkspaceSnapshot, String> {
     queue_verified_job(app, expected_revision, move |store| {
         thermochemistry::from_transition(
@@ -340,6 +420,7 @@ async fn start_thermochemistry(
             temperature_kelvin,
             standard_state,
             solvent,
+            quasi_rrho.unwrap_or_default(),
         )
     })
     .await
@@ -439,6 +520,8 @@ fn launch_calculation(
             && request.dynamics.is_none()
             && request.solution.is_none()
             && request.solution_path.is_none()
+            && request.stoichiometry.is_none()
+            && request.method != mace::METHOD
             && (!request.optimize
                 || (matching_input && workspace.project.settings == request.effective_settings()))
         {
@@ -696,6 +779,9 @@ pub fn run() {
             start_dynamics,
             start_solution,
             start_solution_path,
+            start_stoichiometry,
+            start_mace,
+            mace_force,
             dynamics::show_frame,
             start_transition,
             start_thermochemistry,

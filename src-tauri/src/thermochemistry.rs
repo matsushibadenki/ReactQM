@@ -46,6 +46,8 @@ pub struct Input {
     pub standard_state: StandardState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solvent: Option<Solvent>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quasi_rrho: bool,
     pub reactant: Vec<[f64; 3]>,
     pub product: Vec<[f64; 3]>,
 }
@@ -77,6 +79,8 @@ pub struct Report {
     pub standard_state: StandardState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solvent: Option<Solvent>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quasi_rrho: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub standard_shift_hartree: Option<f64>,
     pub reactant: Species,
@@ -160,6 +164,7 @@ pub fn from_transition(
     temperature_kelvin: f64,
     standard_state: StandardState,
     solvent: Option<Solvent>,
+    quasi_rrho: bool,
 ) -> Result<JobRequest, String> {
     let project = store.restore(id)?;
     let result = project.calculation.ok_or("thermo_source")?;
@@ -195,6 +200,7 @@ pub fn from_transition(
         temperature_kelvin,
         standard_state,
         solvent,
+        quasi_rrho,
         reactant: band.positions[0].clone(),
         product: band.positions[4].clone(),
     });

@@ -46,6 +46,8 @@ pub struct JobRequest {
     pub solution: Option<crate::thermochemistry::Solvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solution_path: Option<crate::solution_path::Input>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stoichiometry: Option<crate::stoichiometry::Input>,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -53,6 +55,32 @@ fn is_false(value: &bool) -> bool {
 impl JobRequest {
     pub fn validate(&self) -> Result<(), String> {
         self.document.validate()?;
+        if self.method == crate::mace::METHOD {
+            crate::mace::validate_scope(&self.document)?;
+            if self.schema_version != 1
+                || uuid::Uuid::parse_str(&self.job_id).is_err()
+                || self.input_hash != self.document.fingerprint()
+                || self.basis != crate::mace::MODEL
+                || self.max_cycle != 0
+                || self.conv_tol != 0.0
+                || self.settings.is_some()
+                || self.optimize
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.refinement.is_some()
+                || self.dynamics.is_some()
+                || self.solution.is_some()
+                || self.solution_path.is_some()
+                || self.stoichiometry.is_some()
+            {
+                return Err("job_invalid".into());
+            }
+            return Ok(());
+        }
+        if let Some(input) = &self.stoichiometry {
+            input.validate(self)?;
+        }
         if let Some(input) = &self.solution_path {
             if self.solution.is_some() {
                 return Err("solution_path_source".into());
@@ -136,7 +164,8 @@ impl JobRequest {
                 if input.source_job == report.source_job
                     && input.temperature_kelvin == report.temperature_kelvin
                     && input.standard_state == report.standard_state
-                    && input.solvent == report.solvent => {}
+                    && input.solvent == report.solvent
+                    && input.quasi_rrho == report.quasi_rrho => {}
             (None, None) => {}
             _ => return Err("result_invalid".into()),
         }
@@ -159,6 +188,11 @@ impl JobRequest {
                 if input.solvent == report.solvent
                     && input.baseline == report.baseline
                     && input.seed_image == report.saddle.seed_image => {}
+            (None, None) => {}
+            _ => return Err("result_invalid".into()),
+        }
+        match (&self.stoichiometry, &result.stoichiometry) {
+            (Some(input), Some(output)) if output.matches(input) => {}
             (None, None) => {}
             _ => return Err("result_invalid".into()),
         }
@@ -204,6 +238,9 @@ impl JobRequest {
         }
     }
     pub fn effective_settings(&self) -> crate::settings::CalculationSettings {
+        if self.method == crate::mace::METHOD {
+            return Default::default();
+        }
         self.settings
             .clone()
             .unwrap_or_else(|| crate::settings::CalculationSettings {
@@ -236,6 +273,17 @@ impl JobRequest {
         next.document_revision = revision;
         Ok(next)
     }
+    pub fn mace(document: Document, revision: u64) -> Result<Self, String> {
+        crate::mace::validate_scope(&document)?;
+        document.validate()?;
+        let mut request = Self::base(document, revision);
+        request.method = crate::mace::METHOD.into();
+        request.basis = crate::mace::MODEL.into();
+        request.max_cycle = 0;
+        request.conv_tol = 0.0;
+        request.validate()?;
+        Ok(request)
+    }
     pub fn new(document: Document, document_revision: u64) -> Result<Self, String> {
         let request = Self::base(document, document_revision);
         request.validate()?;
@@ -261,6 +309,7 @@ impl JobRequest {
             dynamics: None,
             solution: None,
             solution_path: None,
+            stoichiometry: None,
         }
     }
 }
@@ -328,11 +377,18 @@ pub fn execute(
     request.validate()?;
     fs::create_dir_all(directory).map_err(|e| format!("storage: {e}"))?;
     atomic_json(&directory.join("input.json"), request)?;
-    if !config.python.is_file() {
+    let python = if request.method == crate::mace::METHOD {
+        std::env::var_os("REACTQM_MACE_PYTHON")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| config.python.clone())
+    } else {
+        config.python.clone()
+    };
+    if !python.is_file() {
         return Err("worker_missing".into());
     }
     let log = File::create(directory.join("worker.log")).map_err(|e| format!("storage: {e}"))?;
-    let mut command = Command::new(&config.python);
+    let mut command = Command::new(&python);
     command
         .args(["-m", "reactqm_worker", "calculate", "--output-dir"])
         .arg(directory)
@@ -407,6 +463,8 @@ pub fn execute(
                         && cycle
                             <= if let Some(input) = &request.dynamics {
                                 input.steps
+                            } else if request.stoichiometry.is_some() {
+                                17
                             } else if request.solution_path.is_some() {
                                 5
                             } else if request.solution.is_some() {
@@ -443,6 +501,10 @@ pub fn execute(
                                     | "transition_missing"
                                     | "solvent_not_converged"
                                     | "solution_limit"
+                                    | "stoichiometry_stationary"
+                                    | "mace_runtime_missing"
+                                    | "mace_checkpoint_missing"
+                                    | "mace_checkpoint_hash_mismatch"
                                     | "refinement_scope"
                                     | "refinement_not_converged"
                             ) {

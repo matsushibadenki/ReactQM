@@ -31,7 +31,9 @@
     "test:screening": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example settings_probe -- --screening",
     "test:dynamics": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example dynamics_probe",
     "test:solution": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example solution_probe",
-    "test:solution-path": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example solution_path_probe"
+    "test:solution-path": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example solution_path_probe",
+    "test:stoichiometry": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example stoichiometry_probe",
+    "test:mace": "cargo run --manifest-path src-tauri/Cargo.toml --locked --example mace_probe"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

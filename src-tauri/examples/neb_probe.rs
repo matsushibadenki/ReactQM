@@ -144,6 +144,7 @@ fn main() -> Result<(), String> {
                         model: SolventModel::CPcm,
                         medium: Medium::Water,
                     }),
+                    false,
                 )?;
                 catalog.enqueue(&source, None)?;
                 catalog.set_queue_paused(false)?;

@@ -56,6 +56,8 @@ def validate_request(request: dict) -> None:
         original = request["document"]["atoms"]
         if path is not None or transition is not None or request.get("optimize") or request["method"] == screening.METHOD or not 2 <= len(original) <= 16:
             raise ValueError("Invalid thermochemistry input")
+        if type(thermal.get("quasi_rrho", False)) is not bool:
+            raise ValueError("Invalid vibrational entropy model")
         uuid.UUID(thermal["source_job"])
         if type(thermal["temperature_kelvin"]) not in (int, float) or not 1 <= thermal["temperature_kelvin"] <= 2000:
             raise ValueError("Invalid temperature")
@@ -205,6 +207,13 @@ def evaluate(request, emit, checkpoint=None, on_converged=None, *, solvent=None)
 
 
 def calculate(request: dict, output_dir: Path, emit) -> dict:
+    if request.get("method") == "MACE-OFF23":
+        from .mace_potential import calculate_job
+
+        if request.get("schema_version") != 1 or request.get("basis") != "small":
+            raise ValueError("Invalid MACE request")
+        uuid.UUID(request["job_id"])
+        return calculate_job(request, output_dir, emit)
     validate_request(request)
     import h5py
 
@@ -215,6 +224,7 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
     transition = None
     thermal = None
     refinement = None
+    stoichiometry = None
     solution_path = None
     solution = None
     dynamics = None
@@ -242,7 +252,18 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
         }
     solver = []
     is_screening = request["method"] == screening.METHOD
-    if request.get("solution_path") is not None:
+    if request.get("stoichiometry") is not None:
+        from .stoichiometry import UnstationarySpecies, compare_job
+
+        try:
+            stoichiometry = compare_job(request, emit)
+        except UnstationarySpecies as error:
+            raise ArithmeticError("stoichiometry_stationary") from error
+        energy = stoichiometry["reactants"][0]["electronic_hartree"]
+        coordinates = [atom["position_angstrom"] for atom in request["document"]["atoms"]]
+        engine_version = stoichiometry["pyscf_version"]
+        spin_squared = gradients = None
+    elif request.get("solution_path") is not None:
         import hashlib
         import tempfile
         from .solution_path import run
@@ -362,7 +383,7 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
 
         params = request["thermochemistry"]
         thermal = {key: params[key] for key in ("source_job", "temperature_kelvin")}
-        for key in ("standard_state", "solvent"):
+        for key in ("standard_state", "solvent", "quasi_rrho"):
             if key in params:
                 thermal[key] = params[key]
         if params.get("standard_state") == "molar":
@@ -447,6 +468,9 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
         if gradients is not None:
             artifact.create_dataset("gradient", data=gradients).attrs["unit"] = "hartree/bohr"
         artifact.create_dataset("coordinates", data=coordinates).attrs["unit"] = "angstrom"
+        if stoichiometry is not None:
+            group = artifact.create_group("stoichiometry")
+            group.create_dataset("report_json", data=json.dumps(stoichiometry, allow_nan=False))
         if solution_path is not None:
             path_artifact = output_dir / "solution-path.h5.tmp"
             with h5py.File(path_artifact, "r") as path:
@@ -485,12 +509,15 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
                 group.create_dataset(key, data=refinement[key]).attrs["unit"] = "hartree"
             group.create_dataset("geometries", data=geometries).attrs["unit"] = "angstrom"
         if thermal is not None:
-            from .thermochemistry import PRESSURE, FMAX, MODE_CUTOFF, SOLVENTS, MODELS
+            from .thermochemistry import PRESSURE, FMAX, MODE_CUTOFF, QRRHO_REFERENCE_CM1, SOLVENTS, MODELS
 
             group = artifact.create_group("thermochemistry")
             for key in ("source_job", "temperature_kelvin"):
                 group.attrs[key] = thermal[key]
             group.attrs["model"] = "ideal-gas RRHO, single species per structure"
+            if thermal.get("quasi_rrho"):
+                group.attrs["entropy_model"] = "Grimme quasi-RRHO"
+                group.attrs["entropy_reference_cm1"] = QRRHO_REFERENCE_CM1
             group.attrs["pressure_pa"] = PRESSURE
             group.attrs["fmax_ev_per_angstrom"] = FMAX
             group.attrs["standard_state"] = thermal.get("standard_state", "atmosphere")
@@ -565,6 +592,21 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
         result["transition"] = transition
     if band is not None:
         result["neb"] = band.summary
+    if stoichiometry is not None:
+        result["stoichiometry"] = {key: stoichiometry[key] for key in (
+            "temperature_kelvin", "quasi_rrho", "per_species_shift_kj_mol",
+            "atmosphere_kj_mol", "molar_kj_mol",
+        )}
+        for role in ("reactants", "products"):
+            result["stoichiometry"][role] = [
+                {key: item[key] for key in ("job_id", "coefficient", "name")}
+                for item in stoichiometry[role]
+            ]
+        result["stoichiometry"]["saddle"] = (
+            stoichiometry["saddle"]["job_id"] if stoichiometry["saddle"] else None
+        )
+        result["stoichiometry"]["reactant_count"] = stoichiometry["species_counts"]["reactants"]
+        result["stoichiometry"]["product_count"] = stoichiometry["species_counts"]["products"]
     if solution_path is not None:
         result["solution_path"] = solution_path
     if solution is not None:
@@ -597,7 +639,7 @@ def serve(output_dir: Path) -> int:
         code = "calculation_failed"
         if isinstance(error, screening.ScreeningUnavailable):
             code = "screening_missing"
-        elif isinstance(error, ArithmeticError) and str(error) in {"not_converged", "optimization_limit", "screening_not_converged", "neb_limit", "transition_limit", "transition_missing", "solvent_not_converged", "refinement_scope", "refinement_not_converged", "solution_limit"}:
+        elif isinstance(error, ArithmeticError) and str(error) in {"not_converged", "optimization_limit", "screening_not_converged", "neb_limit", "transition_limit", "transition_missing", "solvent_not_converged", "refinement_scope", "refinement_not_converged", "solution_limit", "stoichiometry_stationary", "mace_runtime_missing", "mace_checkpoint_missing", "mace_checkpoint_hash_mismatch"}:
             code = str(error)
         emit({"kind": "error", "schema_version": 1, "job_id": request.get("job_id", "") if isinstance(request, dict) else "",
               "code": code})

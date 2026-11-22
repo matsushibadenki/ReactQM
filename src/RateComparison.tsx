@@ -8,7 +8,7 @@ type Pair = { forward: Estimate | null; reverse: Estimate | null };
 type Conditions = {
   id: string; source: string; settings: Settings; engineVersion: string; temperatureKelvin: number;
   standardState: 'atmosphere' | 'molar'; solvent: { model: 'c_pcm' | 'ief_pcm'; medium: 'water' | 'acetonitrile' } | null;
-  gas: Pair; solution: Pair | null;
+  quasiRrho: boolean; gas: Pair; solution: Pair | null;
 };
 type Comparison = { rows: Conditions[]; comparable: boolean | null };
 
@@ -42,7 +42,7 @@ export function RateComparison({ ids, locale, onClear }: { ids: string[]; locale
       {result.comparable !== null && <p role="status">{result.comparable ? t.rateComparable : t.rateIncomparable}</p>}
       <div className="barrier-cards">{result.rows.map(row => <article key={row.id}>
         <strong>{row.temperatureKelvin} K · {row.standardState === 'molar' ? '1 M' : '1 atm'}</strong>
-        <small>{conditionLabel(row.settings)} · PySCF {row.engineVersion}</small>
+        <small>{conditionLabel(row.settings)} · PySCF {row.engineVersion} · {row.quasiRrho ? 'Grimme quasi-RRHO' : 'RRHO'}</small>
         <table className="rate-table">
           <thead><tr><th scope="col">k (s⁻¹)</th><th scope="col">{t.rateForward}</th><th scope="col">{t.rateReverse}</th></tr></thead>
           <tbody>

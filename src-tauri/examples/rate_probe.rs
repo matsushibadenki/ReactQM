@@ -36,6 +36,7 @@ fn main() -> Result<(), String> {
             temperature_kelvin,
             standard_state,
             solvent,
+            quasi_rrho: false,
             reactant: vec![
                 [0., 0., 0.00230468417],
                 [0., 0., 1.15531220276],

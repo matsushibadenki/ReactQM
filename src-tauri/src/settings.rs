@@ -128,6 +128,8 @@ mod tests {
             dynamics: None,
             solution: None,
             solution_path: None,
+            stoichiometry: None,
+            mace: None,
             job_id: request.job_id.clone(),
             input_hash: doc.fingerprint(),
             method: "RKS".into(),

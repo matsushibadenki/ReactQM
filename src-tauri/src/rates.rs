@@ -35,6 +35,7 @@ pub struct Conditions {
     temperature_kelvin: f64,
     standard_state: StandardState,
     solvent: Option<Solvent>,
+    quasi_rrho: bool,
     gas: Pair,
     solution: Option<Pair>,
 }
@@ -90,6 +91,7 @@ pub fn compare(store: &Catalog, ids: &[String]) -> Result<Comparison, String> {
                 temperature_kelvin: report.temperature_kelvin,
                 standard_state: report.standard_state,
                 solvent: report.solvent,
+                quasi_rrho: report.quasi_rrho,
                 gas: rates(&report, false),
                 solution: report.solvent.map(|_| rates(&report, true)),
             })

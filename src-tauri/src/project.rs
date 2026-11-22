@@ -49,10 +49,60 @@ pub struct Calculation {
     pub solution: Option<crate::solution::Report>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solution_path: Option<crate::solution_path::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stoichiometry: Option<crate::stoichiometry::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mace: Option<crate::mace::Report>,
 }
 
 impl Calculation {
     pub fn validate(&self, document: &Document) -> Result<(), String> {
+        if self.method == crate::mace::METHOD || self.mace.is_some() {
+            if self.method != crate::mace::METHOD
+                || self.basis != crate::mace::MODEL
+                || self.settings.is_some()
+                || self.spin_squared.is_some()
+                || !self.fields.is_empty()
+                || self.optimization.is_some()
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.refinement.is_some()
+                || self.dynamics.is_some()
+                || self.solution.is_some()
+                || self.solution_path.is_some()
+                || self.stoichiometry.is_some()
+                || uuid::Uuid::parse_str(&self.job_id).is_err()
+                || self.input_hash != document.fingerprint()
+                || !self.converged
+                || !self.elapsed_seconds.is_finite()
+                || self.elapsed_seconds < 0.0
+                || self.engine_version.is_empty()
+                || self.engine_version.len() > 64
+                || !self
+                    .mace
+                    .as_ref()
+                    .is_some_and(|report| report.valid(document, self.energy_hartree))
+            {
+                return Err("result_invalid".into());
+            }
+            return Ok(());
+        }
+        if let Some(report) = &self.stoichiometry {
+            if !report.valid()
+                || self.optimization.is_some()
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.refinement.is_some()
+                || self.solution.is_some()
+                || self.solution_path.is_some()
+                || self.dynamics.is_some()
+                || !self.fields.is_empty()
+            {
+                return Err("result_invalid".into());
+            }
+        }
         if let Some(report) = &self.solution_path {
             report.validate(document, self.energy_hartree)?;
             if self.method != "RHF"
@@ -175,6 +225,7 @@ impl Calculation {
                 }
                 None => {
                     self.neb.is_none()
+                        && self.stoichiometry.is_none()
                         && (document.spin != 0 || matches!(self.method.as_str(), "UHF" | "UKS"))
                 }
             }
@@ -306,6 +357,8 @@ mod tests {
             dynamics: None,
             solution: None,
             solution_path: None,
+            stoichiometry: None,
+            mace: None,
             job_id: uuid::Uuid::new_v4().to_string(),
             input_hash: doc.fingerprint(),
             method: "RHF".into(),
