@@ -13,6 +13,7 @@ import numpy as np
 from rdkit import Chem
 
 from mace_heldout import eligible_frames
+from reactqm_worker.active_learning import rank
 from reactqm_worker.mace_potential import diagnostics, evaluate_document
 
 ERROR_CUTOFF = 0.50
@@ -33,12 +34,12 @@ def molecule_key(smiles):
     return Chem.MolToSmiles(molecule, isomericSmiles=False)
 
 
-def sample(path, per_stratum, seed):
+def sample(path, per_stratum, seed, enrich=False):
     rng = random.Random(seed)
     samples = defaultdict(list)
     counts = Counter()
     excluded = Counter()
-    for index, document, reference, info in eligible_frames(path, excluded):
+    for index, document, reference, info in eligible_frames(path, excluded, include_archived=enrich):
         key = molecule_key(info.get("smiles"))
         if not key:
             excluded["missing_molecule_identity"] += 1
@@ -58,7 +59,8 @@ def sample(path, per_stratum, seed):
         if geometry["connectivity_ratio"] > 1.20:
             tags.append("stretched")
         kind = "_and_".join(tags) or "regular"
-        stratum = (split, category, kind)
+        proxy = ("high" if info["archived_max_error"] > ERROR_CUTOFF else "low") if enrich else "all"
+        stratum = (split, category, kind, proxy)
         counts[stratum] += 1
         reservoir = samples[stratum]
         slot = len(reservoir) if len(reservoir) < per_stratum else rng.randrange(counts[stratum])
@@ -71,10 +73,10 @@ def sample(path, per_stratum, seed):
     return samples, counts, excluded
 
 
-def metrics(rows, threshold):
+def metrics(rows, threshold, field="disagreement"):
     counts = dict(tp=0, fp=0, tn=0, fn=0)
     for row in rows:
-        warning = row["geometry"] != "regular" or row["disagreement"] > threshold
+        warning = row["geometry"] != "regular" or row[field] > threshold
         high = row["max_error"] > ERROR_CUTOFF
         counts["tp" if warning and high else "fp" if warning else "fn" if high else "tn"] += 1
     positive = counts["tp"] + counts["fn"]
@@ -83,28 +85,48 @@ def metrics(rows, threshold):
             "specificity": counts["tn"] / negative if negative else None}
 
 
+def budget_metrics(rows, budget):
+    candidates = [{**row, "geometry_key": row["frame"], "job_id": str(row["frame"]),
+                   "score": row["disagreement"]} for row in rows]
+    chosen = rank(candidates, budget)
+    positives = sum(row["max_error"] > ERROR_CUTOFF for row in rows)
+    return {"selected": len(chosen),
+            "high_error_selected": sum(row["max_error"] > ERROR_CUTOFF for row in chosen),
+            "high_error_total": positives,
+            "uniform_random_expected": len(chosen) * positives / len(rows)}
+
+
 def main(args):
-    sampled, counts, excluded = sample(args.xyz, args.per_stratum, args.seed)
+    sampled, counts, excluded = sample(args.xyz, args.per_stratum, args.seed, args.enrich)
     rows = {"calibration": [], "validation": []}
-    for (split, category, geometry), frames in sorted(sampled.items()):
+    for (split, category, geometry, proxy), frames in sorted(sampled.items()):
         for index, key, document, reference in sorted(frames):
             with contextlib.redirect_stdout(sys.stderr):
                 result = evaluate_document(document, args.small, None, args.medium)
             forces = np.asarray(result["forces_ev_per_angstrom"])
             delta = result["diagnostics"]["disagreement"]
             rows[split].append({"frame": index, "molecule": key, "category": category,
-                                "geometry": geometry, "disagreement": delta["max_force_ev_per_angstrom"],
+                                "geometry": geometry, "proxy_stratum": proxy,
+                                "disagreement": delta["max_force_ev_per_angstrom"],
+                                "rms_disagreement": delta["rms_force_ev_per_angstrom"],
                                 "max_error": float(np.linalg.norm(forces - reference, axis=1).max())})
     if not rows["calibration"] or not rows["validation"]:
         raise ValueError("Both molecular splits must contain eligible structures")
     calibration_molecules = {row["molecule"] for row in rows["calibration"]}
     if any(row["molecule"] in calibration_molecules for row in rows["validation"]):
         raise RuntimeError("Molecular identity crossed the split")
-    trial = [(threshold, metrics(rows["calibration"], threshold)) for threshold in CANDIDATES]
-    ranked = [(0.5 * (score["sensitivity"] + score["specificity"]), -abs(threshold - BASELINE_THRESHOLD), threshold)
-              for threshold, score in trial if score["sensitivity"] is not None and score["specificity"] is not None]
-    chosen = max(ranked)[2] if ranked else None
     validation = rows["validation"]
+    trials = {}
+    chosen = {}
+    for field in ("disagreement", "rms_disagreement"):
+        trial = [(threshold, metrics(rows["calibration"], threshold, field)) for threshold in CANDIDATES]
+        ranked = [(0.5 * (score["sensitivity"] + score["specificity"]), -abs(threshold - BASELINE_THRESHOLD), threshold)
+                  for threshold, score in trial
+                  if score["sensitivity"] is not None and score["specificity"] is not None]
+        trials[field] = trial
+        chosen[field] = max(ranked)[2] if ranked else None
+    max_threshold = chosen["disagreement"]
+    rms_threshold = chosen["rms_disagreement"]
     groups = defaultdict(list)
     for row in validation:
         groups[row["category"], row["geometry"]].append(row)
@@ -112,21 +134,26 @@ def main(args):
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     print(json.dumps({
         "dataset_doi": "10.17863/CAM.107498", "xyz_sha256": digest, "seed": args.seed,
-        "per_stratum_limit": args.per_stratum, "excluded_frames": excluded, "unit": "eV/angstrom",
+        "per_stratum_limit": args.per_stratum, "enriched": args.enrich, "excluded_frames": excluded, "unit": "eV/angstrom",
         "small_sha256": result["scope"]["checkpoint_sha256"], "medium_sha256": delta["checkpoint_sha256"],
         "mace_version": result["mace_version"], "torch_version": result["torch_version"],
-        "population": [{"split": a, "category": b, "geometry": c, "count": n}
-                       for (a, b, c), n in sorted(counts.items())],
-        "maximum_error_cutoff": ERROR_CUTOFF, "candidate_calibration_metrics": trial,
-        "selected_threshold": chosen, "current_threshold": BASELINE_THRESHOLD,
+        "population": [{"split": a, "category": b, "geometry": c, "proxy_stratum": d, "count": n}
+                       for (a, b, c, d), n in sorted(counts.items())],
+        "maximum_error_cutoff": ERROR_CUTOFF, "candidate_calibration_metrics": trials["disagreement"],
+        "selected_threshold": max_threshold, "current_threshold": BASELINE_THRESHOLD,
+        "rms_calibration_metrics": trials["rms_disagreement"],
+        "selected_rms_threshold": chosen["rms_disagreement"],
         "validation_current": metrics(validation, BASELINE_THRESHOLD),
-        "validation_selected": metrics(validation, chosen) if chosen is not None else None,
+        "validation_selected": metrics(validation, max_threshold) if max_threshold is not None else None,
+        "validation_rms": metrics(validation, rms_threshold, "rms_disagreement") if rms_threshold is not None else None,
         "validation_by_stratum": [
             {"category": category, "geometry": geometry,
              "current": metrics(group, BASELINE_THRESHOLD),
-             "selected": metrics(group, chosen) if chosen is not None else None}
+             "selected": metrics(group, max_threshold) if max_threshold is not None else None,
+             "rms": metrics(group, rms_threshold, "rms_disagreement") if rms_threshold is not None else None}
             for (category, geometry), group in sorted(groups.items())
         ],
+        "reference_budget_10": budget_metrics(validation, 10),
         "frames": rows,
     }, indent=2, allow_nan=False))
 
@@ -138,6 +165,7 @@ if __name__ == "__main__":
     parser.add_argument("medium", type=Path)
     parser.add_argument("--per-stratum", type=int, default=8)
     parser.add_argument("--seed", type=int, default=5041)
+    parser.add_argument("--enrich", action="store_true", help="Stratify also by the archived MACE force error")
     args = parser.parse_args()
     if not 2 <= args.per_stratum <= 100:
         parser.error("--per-stratum must be in 2–100")

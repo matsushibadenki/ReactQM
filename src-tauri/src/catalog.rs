@@ -43,6 +43,9 @@ pub struct JobRecord {
     pub solution_path: Option<crate::thermochemistry::Solvent>,
     pub stoichiometry: bool,
     pub mace: bool,
+    pub mace_reference: Option<crate::mace_reference::Selection>,
+    pub escalation: Option<crate::escalation::Input>,
+    pub xtb_followup: Option<crate::xtb_followup::Policy>,
     pub multiplicity: Option<u32>,
     pub resumable: bool,
     pub sequence: i64,
@@ -76,6 +79,9 @@ pub struct QueueItem {
     pub solution_path: Option<crate::thermochemistry::Solvent>,
     pub stoichiometry: bool,
     pub mace: bool,
+    pub mace_reference: Option<crate::mace_reference::Selection>,
+    pub escalation: Option<crate::escalation::Input>,
+    pub xtb_followup: Option<crate::xtb_followup::Policy>,
     pub multiplicity: Option<u32>,
     pub settings: Option<crate::settings::CalculationSettings>,
     pub sequence: i64,
@@ -314,6 +320,44 @@ impl Catalog {
         }
         Ok(())
     }
+    pub fn enqueue_reference_batch(&self, requests: &[JobRequest]) -> Result<(), String> {
+        let mut connection = self.connection.lock().map_err(storage)?;
+        let tx = connection.transaction().map_err(storage)?;
+        let queued: usize = tx
+            .query_row(
+                "SELECT COUNT(*) FROM jobs WHERE status='queued'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(storage)?;
+        if queued + requests.len() > 100 {
+            return Err("queue_full".into());
+        }
+        let mut created = Vec::new();
+        let result = (|| {
+            for request in requests {
+                request.validate()?;
+                if request.mace_reference.is_none() {
+                    return Err("mace_reference_selection".into());
+                }
+                let directory = self.directory(&request.job_id)?;
+                fs::create_dir(&directory).map_err(storage)?;
+                created.push(directory.clone());
+                atomic_json(&directory.join("input.json"), request)?;
+                tx.execute("INSERT INTO jobs (id,request_json,name,formula,status,created_at,legacy) VALUES (?1,?2,?3,?4,'queued',?5,0)",
+                    params![request.job_id,serde_json::to_string(request).map_err(storage)?,request.document.name,request.document.formula(),timestamp()?])
+                    .map_err(storage)?;
+            }
+            tx.commit().map_err(storage)
+        })();
+        if result.is_err() {
+            for directory in created {
+                let _ = fs::remove_file(directory.join("input.json"));
+                let _ = fs::remove_dir(directory);
+            }
+        }
+        result
+    }
     pub fn set_queue_paused(&self, paused: bool) -> Result<(), String> {
         self.connection.lock().map_err(storage)?.execute("INSERT INTO catalog_meta (key,value) VALUES ('queue_paused',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[if paused { "1" } else { "0" }]).map_err(storage)?;
         Ok(())
@@ -353,6 +397,9 @@ impl Catalog {
                     .and_then(|job| job.neb.as_ref().map(|path| path.climb)),
                 dynamics: request.as_ref().and_then(|job| job.dynamics.clone()),
                 solution: request.as_ref().and_then(|job| job.solution),
+                xtb_followup: request.as_ref().and_then(|job| job.xtb_followup.clone()),
+                escalation: request.as_ref().and_then(|job| job.escalation.clone()),
+                mace_reference: request.as_ref().and_then(|job| job.mace_reference.clone()),
                 mace: request
                     .as_ref()
                     .is_some_and(|job| job.method == crate::mace::METHOD),
@@ -514,6 +561,9 @@ impl Catalog {
                     neb,
                     dynamics: request.as_ref().and_then(|job| job.dynamics.clone()),
                     solution: request.as_ref().and_then(|job| job.solution),
+                    xtb_followup: request.as_ref().and_then(|job| job.xtb_followup.clone()),
+                    escalation: request.as_ref().and_then(|job| job.escalation.clone()),
+                    mace_reference: request.as_ref().and_then(|job| job.mace_reference.clone()),
                     mace: request
                         .as_ref()
                         .is_some_and(|job| job.method == crate::mace::METHOD),
@@ -1024,6 +1074,10 @@ mod tests {
             solution_path: None,
             stoichiometry: None,
             mace: None,
+            mace_reference: None,
+            escalation: None,
+            xtb_followup: None,
+            xtb_max_force: None,
             settings: None,
             job_id: request.job_id.clone(),
             input_hash: request.input_hash.clone(),

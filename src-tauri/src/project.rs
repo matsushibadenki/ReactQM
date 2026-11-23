@@ -53,10 +53,82 @@ pub struct Calculation {
     pub stoichiometry: Option<crate::stoichiometry::Report>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mace: Option<crate::mace::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mace_reference: Option<crate::mace_reference::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalation: Option<crate::escalation::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xtb_followup: Option<crate::xtb_followup::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xtb_max_force: Option<f64>,
 }
 
 impl Calculation {
+    fn has_other_result_kind(&self) -> bool {
+        !self.fields.is_empty()
+            || self.mace.is_some()
+            || self.optimization.is_some()
+            || self.neb.is_some()
+            || self.transition.is_some()
+            || self.thermochemistry.is_some()
+            || self.refinement.is_some()
+            || self.dynamics.is_some()
+            || self.solution.is_some()
+            || self.solution_path.is_some()
+            || self.stoichiometry.is_some()
+            || self.mace_reference.is_some()
+    }
+
     pub fn validate(&self, document: &Document) -> Result<(), String> {
+        if self.xtb_max_force.is_some_and(|force| {
+            self.method != crate::settings::SCREENING
+                || self.xtb_followup.is_some()
+                || !force.is_finite()
+                || force < 0.0
+        }) {
+            return Err("result_invalid".into());
+        }
+        if let Some(report) = &self.xtb_followup {
+            if !report.valid(document, self.energy_hartree)
+                || self.settings.as_ref() != Some(&report.policy_v1.settings())
+                || self.has_other_result_kind()
+                || self.escalation.is_some()
+            {
+                return Err("result_invalid".into());
+            }
+        }
+        if let Some(report) = &self.escalation {
+            if !report.valid(document, self.energy_hartree)
+                || self.settings.as_ref() != Some(&crate::escalation::settings())
+                || self.has_other_result_kind()
+            {
+                return Err("result_invalid".into());
+            }
+        }
+        if let Some(report) = &self.mace_reference {
+            if !report.selection.valid()
+                || self.settings.as_ref() != Some(&crate::mace_reference::settings())
+                || report.forces_ev_per_angstrom.len() != document.atoms.len()
+                || report
+                    .forces_ev_per_angstrom
+                    .iter()
+                    .flatten()
+                    .any(|value| !value.is_finite())
+                || !self.fields.is_empty()
+                || self.mace.is_some()
+                || self.optimization.is_some()
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.refinement.is_some()
+                || self.dynamics.is_some()
+                || self.solution.is_some()
+                || self.solution_path.is_some()
+                || self.stoichiometry.is_some()
+            {
+                return Err("result_invalid".into());
+            }
+        }
         if self.method == crate::mace::METHOD || self.mace.is_some() {
             if self.method != crate::mace::METHOD
                 || self.basis != crate::mace::MODEL
@@ -359,6 +431,10 @@ mod tests {
             solution_path: None,
             stoichiometry: None,
             mace: None,
+            mace_reference: None,
+            escalation: None,
+            xtb_followup: None,
+            xtb_max_force: None,
             job_id: uuid::Uuid::new_v4().to_string(),
             input_hash: doc.fingerprint(),
             method: "RHF".into(),

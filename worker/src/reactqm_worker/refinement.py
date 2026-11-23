@@ -2,7 +2,7 @@
 import math
 
 
-def evaluate(request, positions):
+def evaluate(request, positions, *, method=None):
     from pyscf import cc, gto, mp, scf
 
     molecule = gto.M(
@@ -22,7 +22,7 @@ def evaluate(request, positions):
     if not reference.converged:
         raise ArithmeticError("not_converged")
     correction = 0.0
-    if request["refinement"]["method"] == "mp2":
+    if (method or request["refinement"]["method"]) == "mp2":
         solver = mp.MP2(reference)
         solver.kernel(with_t2=False)
     else:

@@ -224,6 +224,9 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
     transition = None
     thermal = None
     refinement = None
+    xtb_followup = None
+    xtb_max_force = None
+    escalation = None
     stoichiometry = None
     solution_path = None
     solution = None
@@ -251,8 +254,46 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
             "ase_version": output["identity"]["ase_version"], "positions_angstrom": positions,
         }
     solver = []
-    is_screening = request["method"] == screening.METHOD
-    if request.get("stoichiometry") is not None:
+    is_screening = request["method"] == screening.METHOD and request.get("xtb_followup") is None
+    if request.get("xtb_followup") is not None:
+        from ase import units
+        import numpy as np
+
+        policy = request["xtb_followup"]
+        force = None
+        if policy["decision"] == "dft":
+            import pyscf
+
+            energy, gradients, coordinates, spin_squared = evaluate(request, emit)
+            engine_version = pyscf.__version__
+            force = float(np.linalg.norm(gradients, axis=1).max() * units.Hartree / units.Bohr)
+        elif policy["decision"] in ("below_threshold", "out_of_scope", "no_budget"):
+            energy = policy["source_energy_hartree"]
+            engine_version = policy["source_engine"]
+            gradients = spin_squared = None
+            coordinates = [atom["position_angstrom"] for atom in request["document"]["atoms"]]
+        else:
+            raise ValueError("Unknown xTB follow-up decision")
+        xtb_followup = {"policy_v1": policy, "dft_max_force_ev_per_angstrom": force}
+    elif request.get("escalation") is not None:
+        import pyscf
+        from .refinement import evaluate as correlated
+
+        policy = request["escalation"]
+        coordinates = [atom["position_angstrom"] for atom in request["document"]["atoms"]]
+        decision = policy["decision"]
+        if decision not in ("mp2", "ccsdt", "below_threshold", "out_of_scope", "no_budget"):
+            raise ValueError("Unknown escalation decision")
+        energy, rhf, triples = policy["dft_energy_hartree"], None, None
+        if decision in ("mp2", "ccsdt"):
+            emit({"kind": "progress", "schema_version": 1, "job_id": request["job_id"], "cycle": 1})
+            energy, rhf, triples, orbitals = correlated(request, coordinates, method=decision)
+            if orbitals != policy["orbitals"]:
+                raise ValueError("Orbital count disagrees with policy")
+        escalation = {"policy_v1": policy, "rhf_hartree": rhf, "triples_hartree": triples}
+        spin_squared = gradients = None
+        engine_version = pyscf.__version__
+    elif request.get("stoichiometry") is not None:
         from .stoichiometry import UnstationarySpecies, compare_job
 
         try:
@@ -414,12 +455,23 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
         engine_version = pyscf.__version__
         spin_squared = None
     elif is_screening:
+        import numpy as np
+        from ase import units
+
         energy, gradients, coordinates, engine_version, binding_version = screening.evaluate(request["document"])
+        xtb_max_force = float(np.linalg.norm(gradients, axis=1).max() * units.Hartree / units.Bohr)
         spin_squared = None
     else:
         import pyscf
         energy, gradients, coordinates, spin_squared = evaluate(evaluation_request, evaluation_emit, str(output_dir / "scf.chk"), on_converged=solver.append)
         engine_version = pyscf.__version__
+    mace_reference = None
+    if request.get("mace_reference") is not None:
+        from ase import units
+
+        mace_reference = {"selection": request["mace_reference"],
+                          "forces_ev_per_angstrom": (-gradients * units.Hartree / units.Bohr).tolist()}
+        solver.clear()
     if optimization is not None:
         import numpy as np
         from ase import units
@@ -443,9 +495,10 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
             artifact.attrs["scc_max_iterations"] = request["max_cycle"]
             artifact.attrs["scc_accuracy"] = screening.ACCURACY
             artifact.attrs["electronic_temperature_kelvin"] = screening.TEMPERATURE_K
+            artifact.attrs["max_force_ev_per_angstrom"] = xtb_max_force
             artifact.attrs["environment"] = "gas"
             artifact.attrs["converged"] = True
-        else:
+        elif xtb_followup is None or xtb_followup["policy_v1"]["decision"] == "dft":
             artifact.attrs["pyscf_version"] = engine_version
             artifact.attrs["max_cycle"] = request["max_cycle"]
             artifact.attrs["conv_tol"] = request["conv_tol"]
@@ -465,9 +518,19 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
             artifact.attrs["optimization_steps"] = optimization["steps"]
             artifact.attrs["max_force_ev_per_angstrom"] = optimization["max_force_ev_per_angstrom"]
         artifact.create_dataset("energy", data=energy).attrs["unit"] = "hartree"
+        if mace_reference is not None:
+            group = artifact.create_group("mace_reference")
+            group.attrs["selection_json"] = json.dumps(mace_reference["selection"], sort_keys=True)
+            group.create_dataset("forces", data=mace_reference["forces_ev_per_angstrom"]).attrs["unit"] = "eV/angstrom"
         if gradients is not None:
             artifact.create_dataset("gradient", data=gradients).attrs["unit"] = "hartree/bohr"
         artifact.create_dataset("coordinates", data=coordinates).attrs["unit"] = "angstrom"
+        if xtb_followup is not None:
+            group = artifact.create_group("xtb_followup")
+            group.attrs["report_json"] = json.dumps(xtb_followup, allow_nan=False)
+        if escalation is not None:
+            group = artifact.create_group("escalation")
+            group.attrs["report_json"] = json.dumps(escalation, allow_nan=False)
         if stoichiometry is not None:
             group = artifact.create_group("stoichiometry")
             group.create_dataset("report_json", data=json.dumps(stoichiometry, allow_nan=False))
@@ -613,6 +676,14 @@ def calculate(request: dict, output_dir: Path, emit) -> dict:
         result["solution"] = solution
     if dynamics is not None:
         result["dynamics"] = dynamics
+    if mace_reference is not None:
+        result["mace_reference"] = mace_reference
+    if xtb_max_force is not None:
+        result["xtb_max_force"] = xtb_max_force
+    if xtb_followup is not None:
+        result["xtb_followup"] = xtb_followup
+    if escalation is not None:
+        result["escalation"] = escalation
     if fields:
         result["fields"] = fields
     atomic_json(output_dir / "result.json", result)

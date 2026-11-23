@@ -48,6 +48,12 @@ pub struct JobRequest {
     pub solution_path: Option<crate::solution_path::Input>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stoichiometry: Option<crate::stoichiometry::Input>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mace_reference: Option<crate::mace_reference::Selection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalation: Option<crate::escalation::Input>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xtb_followup: Option<crate::xtb_followup::Policy>,
 }
 fn is_false(value: &bool) -> bool {
     !value
@@ -55,6 +61,58 @@ fn is_false(value: &bool) -> bool {
 impl JobRequest {
     pub fn validate(&self) -> Result<(), String> {
         self.document.validate()?;
+        if let Some(policy) = &self.xtb_followup {
+            if !policy.valid(&self.document)
+                || self.effective_settings() != policy.settings()
+                || self.optimize
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.refinement.is_some()
+                || self.dynamics.is_some()
+                || self.solution.is_some()
+                || self.solution_path.is_some()
+                || self.stoichiometry.is_some()
+                || self.mace_reference.is_some()
+                || self.escalation.is_some()
+            {
+                return Err("xtb_followup_source".into());
+            }
+        }
+        if let Some(input) = &self.escalation {
+            if !input.valid(&self.document)
+                || self.effective_settings() != crate::escalation::settings()
+                || self.optimize
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.refinement.is_some()
+                || self.dynamics.is_some()
+                || self.solution.is_some()
+                || self.solution_path.is_some()
+                || self.stoichiometry.is_some()
+                || self.mace_reference.is_some()
+            {
+                return Err("escalation_source".into());
+            }
+        }
+        if let Some(reference) = &self.mace_reference {
+            if !reference.valid()
+                || crate::mace::validate_scope(&self.document).is_err()
+                || self.effective_settings() != crate::mace_reference::settings()
+                || self.optimize
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.refinement.is_some()
+                || self.dynamics.is_some()
+                || self.solution.is_some()
+                || self.solution_path.is_some()
+                || self.stoichiometry.is_some()
+            {
+                return Err("mace_reference_selection".into());
+            }
+        }
         if self.method == crate::mace::METHOD {
             crate::mace::validate_scope(&self.document)?;
             if self.schema_version != 1
@@ -196,6 +254,22 @@ impl JobRequest {
             (None, None) => {}
             _ => return Err("result_invalid".into()),
         }
+        if self.mace_reference.as_ref()
+            != result
+                .mace_reference
+                .as_ref()
+                .map(|report| &report.selection)
+        {
+            return Err("result_invalid".into());
+        }
+        if self.escalation.as_ref() != result.escalation.as_ref().map(|report| &report.policy_v1) {
+            return Err("result_invalid".into());
+        }
+        if self.xtb_followup.as_ref()
+            != result.xtb_followup.as_ref().map(|report| &report.policy_v1)
+        {
+            return Err("result_invalid".into());
+        }
         let document = self.result_document(result)?;
         result.validate(&document)?;
         if result.input_hash != self.input_hash
@@ -310,6 +384,9 @@ impl JobRequest {
             solution: None,
             solution_path: None,
             stoichiometry: None,
+            mace_reference: None,
+            escalation: None,
+            xtb_followup: None,
         }
     }
 }

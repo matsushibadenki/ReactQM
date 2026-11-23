@@ -1,3 +1,6 @@
+import { XtbQueue, XtbResult, type XtbReport } from './XtbFollowup';
+import { EscalationQueue, EscalationResult, type EscalationReport } from './Escalation';
+import { ReferenceResult, type ReferenceSelection } from './MaceReference';
 import { MaceDetails, MaceQueue, type MaceReport } from './Mace';
 import { StoichiometryResult, type StoichiometryReport } from './Stoichiometry';
 import { SolutionBarriers, solutionPathLabels } from './SolutionPath';
@@ -25,7 +28,7 @@ type Transition = {
   source_job: string; seed_image: number; sella_version: string; steps: number; imaginary_count: number; frequencies_cm1: number[];
   branches: { converged: boolean; match: 'reactant' | 'product' | null; reactant_rmsd_angstrom: number; product_rmsd_angstrom: number; max_force_ev_per_angstrom: number; steps: number }[];
 };
-type Calculation = FieldResult & { mace?: MaceReport; stoichiometry?: StoichiometryReport; input_hash: string; basis: string; energy_hartree: number; engine_version: string; elapsed_seconds: number; converged: boolean; settings?: Settings; transition?: Transition; thermochemistry?: ThermalReport; refinement?: RefinementReport; solution?: SolutionReport; spin_squared?: number; optimization?: { steps: number; max_force_ev_per_angstrom: number; ase_version: string } };
+type Calculation = FieldResult & { mace?: MaceReport; escalation?: EscalationReport; xtb_followup?: XtbReport; xtb_max_force?: number; mace_reference?: { selection: ReferenceSelection }; stoichiometry?: StoichiometryReport; input_hash: string; basis: string; energy_hartree: number; engine_version: string; elapsed_seconds: number; converged: boolean; settings?: Settings; transition?: Transition; thermochemistry?: ThermalReport; refinement?: RefinementReport; solution?: SolutionReport; spin_squared?: number; optimization?: { steps: number; max_force_ev_per_angstrom: number; ase_version: string } };
 type JobStatus = 'running' | 'cancelling' | 'succeeded' | 'cancelled' | 'failed' | 'timed_out' | 'interrupted' | 'corrupt';
 type InputFormat = 'xyz' | 'smiles' | 'sdf';
 type StructureSource = { format: string; method: 'etkdgv3' | 'sdf_3d'; seed: number | null; engineVersion: string; inputHash: string };
@@ -130,7 +133,7 @@ function App() {
 
   const moleculePanel = (      <section aria-labelledby="molecule-title">
         <div className="heading"><h2 id="molecule-title">{t.molecule}</h2>{snapshot.dirty ? <span className="dirty" aria-label={t.unsaved} title={t.unsaved}>●</span> : null}</div>
-        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} manualBonds={snapshot.manualBonds} result={result?.transition || result?.thermochemistry || result?.refinement || result?.solution || result?.stoichiometry || result?.mace ? null : result} editingDisabled={locked} onEdit={edit => void command('edit_molecule', { edit })} />
+        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} manualBonds={snapshot.manualBonds} result={result?.transition || result?.thermochemistry || result?.refinement || result?.solution || result?.stoichiometry || result?.mace || result?.mace_reference || result?.escalation || result?.xtb_followup ? null : result} editingDisabled={locked} onEdit={edit => void command('edit_molecule', { edit })} />
         <div className="molecule-summary"><strong className="formula">{snapshot.formula || '—'}</strong><span>{snapshot.atomCount ? snapshot.name || t.untitled : t.empty}</span></div>
         <dl className="metrics"><div><dt>{t.atoms}</dt><dd>{snapshot.atomCount}</dd></div><div><dt>{t.charge} <Info text={t.chargeHelp} /></dt><dd>{snapshot.charge === 0 ? `0 · ${t.neutral}` : snapshot.charge > 0 ? `+${snapshot.charge}` : `−${Math.abs(snapshot.charge)}`}</dd></div><div><dt>{t.spin} <Info text={t.spinHelp} /></dt><dd>{snapshot.atomCount ? snapshot.spin + 1 : '—'}</dd></div></dl>
         {snapshot.atomCount ? <form key={snapshot.documentRevision} className="input-row multiplicity-editor" onSubmit={event => {
@@ -152,9 +155,14 @@ function App() {
         <SolutionQueue locale={snapshot.locale} disabled={locked || snapshot.atomCount < 2 || snapshot.atomCount > 10 || snapshot.spin !== 0 || snapshot.settings?.method !== 'RHF'} queue={solvent => void command('start_solution', { solvent })} />
         <DynamicsQueue locale={snapshot.locale} disabled={locked || snapshot.atomCount < 2 || snapshot.atomCount > 10 || snapshot.settings?.method === 'GFN2-xTB'} queue={input => void command('start_dynamics', { input })} />
         <div className="calculation-actions">
-          <span className="job-status" role="status">{result ? t.succeeded : t.noResult}</span>
+          <span className="job-status" role="status">{result?.escalation || result?.xtb_followup ? null : result ? t.succeeded : t.noResult}</span>
         </div>
-        {result?.mace ? <MaceDetails key={result.job_id} report={result.mace} locale={snapshot.locale} jobId={result.job_id} atomCount={snapshot.atomCount} revision={snapshot.documentRevision} engineVersion={result.engine_version} /> : result?.stoichiometry ? <StoichiometryResult locale={snapshot.locale} report={result.stoichiometry} /> : result ? <div className="result">
+        {result?.xtb_followup ? <XtbResult report={result.xtb_followup} energy={result.energy_hartree} locale={snapshot.locale} /> : result?.escalation ? <EscalationResult report={result.escalation} energy={result.energy_hartree} locale={snapshot.locale} /> : result?.mace_reference ? <><EscalationQueue locale={snapshot.locale} disabled={locked} submit={budget => void command('start_escalation', { id: result.job_id, budget })} /><ReferenceResult key={result.job_id} selection={result.mace_reference.selection} locale={snapshot.locale} jobId={result.job_id} atomCount={snapshot.atomCount} revision={snapshot.documentRevision} energy={result.energy_hartree} engineVersion={result.engine_version} /></> : result?.mace ? <MaceDetails key={result.job_id} report={result.mace} locale={snapshot.locale} jobId={result.job_id} atomCount={snapshot.atomCount} revision={snapshot.documentRevision} engineVersion={result.engine_version} /> : result?.stoichiometry ? <StoichiometryResult locale={snapshot.locale} report={result.stoichiometry} /> : result ? <div className="result">
+          {result.method === "GFN2-xTB" && result.xtb_max_force === undefined ? <small>{errorMessage("xtb_followup_force_missing", snapshot.locale)}</small> : null}
+          {result.xtb_max_force !== undefined ? <>
+            <p>{t.maximumForce} · {result.xtb_max_force.toFixed(3)} eV/Å</p>
+            <XtbQueue locale={snapshot.locale} disabled={locked} submit={budget => void command('start_xtb_followup', { id: result.job_id, budget })} />
+          </> : null}
           {result.transition ? <TransitionDetails result={result.transition} locale={snapshot.locale} /> : null}
           {result.transition?.imaginary_count === 1 && result.transition.branches.some(branch => branch.match === 'reactant') && result.transition.branches.some(branch => branch.match === 'product') ?
             <ThermalQueue key={result.job_id} locale={snapshot.locale} disabled={locked} onQueue={conditions => void command('start_thermochemistry', { id: result.job_id, ...conditions })} /> : null}

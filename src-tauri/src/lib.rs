@@ -3,10 +3,12 @@ pub mod catalog;
 pub mod document;
 pub mod dynamics;
 mod editor;
+pub mod escalation;
 pub mod fields;
 pub mod jobs;
 pub mod layout;
 pub mod mace;
+pub mod mace_reference;
 pub mod neb;
 pub mod panel_windows;
 pub mod project;
@@ -25,6 +27,7 @@ pub mod thermochemistry;
 pub mod transition;
 pub mod valence;
 pub mod window_geometry;
+pub mod xtb_followup;
 
 use catalog::{Catalog, CatalogState, JobPage, QueuePage};
 use document::Document;
@@ -258,6 +261,75 @@ async fn start_mace(
 }
 
 #[tauri::command]
+async fn start_xtb_followup(
+    app: tauri::AppHandle,
+    expected_revision: u64,
+    id: String,
+    budget: u8,
+) -> Result<WorkspaceSnapshot, String> {
+    queue_verified_job(app, expected_revision, move |store| {
+        xtb_followup::from_history(store, &id, budget, expected_revision)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn start_escalation(
+    app: tauri::AppHandle,
+    expected_revision: u64,
+    id: String,
+    budget: u8,
+) -> Result<WorkspaceSnapshot, String> {
+    queue_verified_job(app, expected_revision, move |store| {
+        escalation::from_history(store, &id, budget, expected_revision)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn start_mace_reference(
+    app: tauri::AppHandle,
+    expected_revision: u64,
+    ids: Vec<String>,
+    budget: usize,
+    warnings_only: Option<bool>,
+) -> Result<WorkspaceSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let catalog = app.state::<CatalogState>();
+        let store = catalog.get()?;
+        let requests = mace_reference::from_history(
+            store,
+            ids,
+            budget,
+            expected_revision,
+            warnings_only.unwrap_or(false),
+        )?;
+        if requests.is_empty() {
+            return Err("mace_reference_no_warning".into());
+        };
+        let runner = app.state::<Scheduler>();
+        let gate = runner.gate.lock().map_err(|_| "storage")?;
+        if gate.stopping {
+            return Err("queue_stopping".into());
+        }
+        let snapshot = {
+            let state = app.state::<AppState>();
+            let mut workspace = state.0.lock().map_err(|_| "storage")?;
+            check_revision(&workspace, expected_revision)?;
+            store.enqueue_reference_batch(&requests)?;
+            workspace.revision += 1;
+            workspace.snapshot()
+        };
+        drop(gate);
+        runner.wake();
+        let _ = app.emit("job-history-changed", ());
+        publish(&app, snapshot)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 fn mace_force(
     app: tauri::AppHandle,
     expected_revision: u64,
@@ -272,8 +344,18 @@ fn mace_force(
         .calculation
         .as_ref()
         .filter(|result| result.job_id == job_id)
-        .and_then(|result| result.mace.as_ref())
-        .and_then(|report| report.forces_ev_per_angstrom.get(index))
+        .and_then(|result| {
+            result
+                .mace
+                .as_ref()
+                .and_then(|report| report.forces_ev_per_angstrom.get(index))
+                .or_else(|| {
+                    result
+                        .mace_reference
+                        .as_ref()
+                        .and_then(|report| report.forces_ev_per_angstrom.get(index))
+                })
+        })
         .copied()
         .ok_or_else(|| "result_invalid".into())
 }
@@ -522,6 +604,9 @@ fn launch_calculation(
             && request.solution_path.is_none()
             && request.stoichiometry.is_none()
             && request.method != mace::METHOD
+            && request.mace_reference.is_none()
+            && request.escalation.is_none()
+            && request.xtb_followup.is_none()
             && (!request.optimize
                 || (matching_input && workspace.project.settings == request.effective_settings()))
         {
@@ -781,6 +866,9 @@ pub fn run() {
             start_solution_path,
             start_stoichiometry,
             start_mace,
+            start_mace_reference,
+            start_escalation,
+            start_xtb_followup,
             mace_force,
             dynamics::show_frame,
             start_transition,

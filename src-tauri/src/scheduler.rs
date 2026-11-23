@@ -206,6 +206,7 @@ pub fn run_claimed(
                 || request.transition.is_some()
                 || request.thermochemistry.is_some()
                 || request.refinement.is_some()
+                || request.escalation.is_some()
                 || request.dynamics.is_some()
                 || request.solution.is_some()
             {

@@ -67,7 +67,7 @@ def smoke() -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ReactQM worker diagnostics")
-    parser.add_argument("command", choices=["doctor", "smoke", "calculate", "valence", "structure", "optimize", "field", "dynamics", "solution", "solution-path", "stoichiometry", "mace", "mace-scope"])
+    parser.add_argument("command", choices=["doctor", "smoke", "calculate", "valence", "structure", "optimize", "field", "dynamics", "solution", "solution-path", "stoichiometry", "mace", "mace-scope", "mace-reference-batch"])
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--fmax", type=float, default=0.05)
@@ -81,6 +81,18 @@ def main() -> None:
     parser.add_argument("--solvent", choices=["water", "acetonitrile"], default="water")
     parser.add_argument("--model-path", type=Path)
     args = parser.parse_args()
+    if args.command == "mace-reference-batch":
+        if args.input is None:
+            parser.error("mace-reference-batch requires --input")
+        from .active_learning import run
+
+        try:
+            with contextlib.redirect_stdout(sys.stderr):
+                result = run(args.input)
+            print(json.dumps(result, allow_nan=False))
+        except Exception as error:
+            parser.exit(1, f"MACE reference batch failed: {error}\n")
+        return
     if args.command in ("mace", "mace-scope"):
         from .mace_potential import evaluate, scope
 

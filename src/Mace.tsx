@@ -57,6 +57,17 @@ export function MaceQueue({ locale, disabled, scopeError, queue }: { locale: Loc
 
 export function MaceDetails({ report, locale, jobId, atomCount, revision, engineVersion }: { report: MaceReport; locale: Locale; jobId: string; atomCount: number; revision: number; engineVersion: string }) {
   const t = messages[locale];
+  return <section className="result">
+    <strong>MACE-OFF23-small</strong>
+    <div className="energy"><output>{report.energy_ev.toFixed(8)}</output><span>eV</span></div>
+    <AtomForce locale={locale} jobId={jobId} atomCount={atomCount} revision={revision} />
+    <MaceDiagnostics value={report.diagnostics} locale={locale} />
+    <details><summary>{t.provenance}</summary><code>MACE {engineVersion} · PyTorch {report.torch_version} · ASE {report.ase_version}</code><code>SHA-256 {report.checkpoint_sha256}</code>{report.diagnostics?.disagreement ? <code>Medium SHA-256 {report.diagnostics.disagreement.checkpoint_sha256}</code> : null}</details>
+  </section>;
+}
+
+export function AtomForce({ locale, jobId, atomCount, revision }: { locale: Locale; jobId: string; atomCount: number; revision: number }) {
+  const t = messages[locale];
   const label = labels[locale].force;
   const [index, setIndex] = useState(0);
   const [force, setForce] = useState<{ index: number; vector: [number, number, number] } | null>(null);
@@ -69,9 +80,7 @@ export function MaceDetails({ report, locale, jobId, atomCount, revision, engine
     return () => { current = false; };
   }, [index, revision, jobId]);
 
-  return <section className="result">
-    <strong>MACE-OFF23-small</strong>
-    <div className="energy"><output>{report.energy_ev.toFixed(8)}</output><span>eV</span></div>
+  return <div>
     <label>{label} <select value={index} onChange={event => { setError(null); setIndex(Number(event.target.value)); }}>
       {Array.from({ length: atomCount }, (_, i) => <option key={i} value={i}>{t.atomLabel} {i + 1}</option>)}
     </select></label>
@@ -79,7 +88,5 @@ export function MaceDetails({ report, locale, jobId, atomCount, revision, engine
       {force.vector.map((value, axis) => <div key={axis}><dt>{'XYZ'[axis]}</dt><dd>{value.toFixed(6)} eV/Å</dd></div>)}
     </dl> : null}
     {error ? <p role="alert">{errorMessage(error, locale)}</p> : null}
-    <MaceDiagnostics value={report.diagnostics} locale={locale} />
-    <details><summary>{t.provenance}</summary><code>MACE {engineVersion} · PyTorch {report.torch_version} · ASE {report.ase_version}</code><code>SHA-256 {report.checkpoint_sha256}</code>{report.diagnostics?.disagreement ? <code>Medium SHA-256 {report.diagnostics.disagreement.checkpoint_sha256}</code> : null}</details>
-  </section>;
+  </div>;
 }

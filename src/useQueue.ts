@@ -1,10 +1,13 @@
+import type { XtbPolicy } from './XtbFollowup';
+import type { Policy } from './Escalation';
+import type { ReferenceSelection } from './MaceReference';
 import type { Solvent } from './Solution';
 import type { DynamicsInput } from './Dynamics';
 import type { Settings } from './CalculationControls';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-export type QueueItem = { mace?: boolean; stoichiometry?: boolean; optimize?: boolean; dynamics?: DynamicsInput | null; solution?: Solvent | null; solutionPath?: Solvent | null; transition?: boolean; thermochemistry?: boolean; refinement?: 'mp2' | 'ccsdt' | null; neb?: boolean | null; multiplicity?: number | null; settings?: Settings; sequence: number; id: string; name: string; formula: string; status: string };
+export type QueueItem = { xtbFollowup?: XtbPolicy | null; escalation?: Policy | null; maceReference?: ReferenceSelection | null; mace?: boolean; stoichiometry?: boolean; optimize?: boolean; dynamics?: DynamicsInput | null; solution?: Solvent | null; solutionPath?: Solvent | null; transition?: boolean; thermochemistry?: boolean; refinement?: 'mp2' | 'ccsdt' | null; neb?: boolean | null; multiplicity?: number | null; settings?: Settings; sequence: number; id: string; name: string; formula: string; status: string };
 export type QueuePage = { paused: boolean; waiting: number; active: QueueItem | null; items: QueueItem[]; nextCursor: number | null };
 export function useQueue() {
   const [queue, setQueue] = useState<QueuePage>({ paused: true, waiting: 0, active: null, items: [], nextCursor: null });

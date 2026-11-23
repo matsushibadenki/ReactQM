@@ -15,7 +15,7 @@ from scipy.stats import spearmanr
 from reactqm_worker.mace_potential import check_document, evaluate_document
 
 
-def eligible_frames(path, excluded):
+def eligible_frames(path, excluded, *, include_archived=False):
     for index, atoms in enumerate(iread(path, index=":", format="extxyz")):
         if atoms.info.get("total_charge") != 0 or atoms.pbc.any():
             excluded["charge_or_periodicity"] += 1
@@ -34,7 +34,13 @@ def eligible_frames(path, excluded):
         reference = atoms.calc.results.get("forces") if atoms.calc else None
         if reference is None or reference.shape != (len(atoms), 3) or not np.isfinite(reference).all():
             raise ValueError(f"Missing or invalid reference forces at frame {index}")
-        yield index, document, reference, atoms.info
+        info = atoms.info
+        if include_archived:
+            archived = atoms.arrays.get("MACE_forces")
+            if archived is None or archived.shape != reference.shape or not np.isfinite(archived).all():
+                raise ValueError(f"Missing or invalid archived MACE forces at frame {index}")
+            info = {**info, "archived_max_error": float(np.linalg.norm(archived - reference, axis=1).max())}
+        yield index, document, reference, info
 
 
 def sample_frames(path, size, seed):

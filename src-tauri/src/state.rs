@@ -182,6 +182,9 @@ impl Workspace {
                 .map_or(doc.is_some(), |saved| saved != &self.project),
             has_saved: self.saved_available,
             calculation: self.project.calculation.clone().map(|mut result| {
+                if let Some(report) = &mut result.mace_reference {
+                    report.forces_ev_per_angstrom.clear();
+                }
                 if let Some(report) = &mut result.mace {
                     report.forces_ev_per_angstrom.clear();
                 }
@@ -268,6 +271,10 @@ mod tests {
             solution_path: None,
             stoichiometry: None,
             mace: None,
+            mace_reference: None,
+            escalation: None,
+            xtb_followup: None,
+            xtb_max_force: None,
             settings: None,
             job_id: id.clone(),
             input_hash: document.fingerprint(),
