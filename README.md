@@ -57,7 +57,7 @@ English: Import one SMILES or SDF/MOL molecule. Seeded, single-threaded ETKDGv3 
 1. ツールバーの **H₂** または **H₂O** を押すか、「XYZを取り込む」を展開してXYZを入力し「適用」を押します。ファイルアイコンからXYZファイルを選ぶこともできます。
 2. 必要に応じて、取り込み前に電荷・スピン多重度（2S + 1）を設定します。
 3. 計算パネルの「次の計算」で手法・基底と必要なSCF設定を選び、上部の「待機列に追加」を押します。「待機列を再開」で投入順に実行します。実行中の分子名・SCF反復数・取消操作も上部に表示します。
-4. 収束した場合に全エネルギー（hartree / Eh）とエンジン版・計算時間を表示します。計算記録からjob IDと入力SHA-256を確認できます。
+4. 収束した場合は、計算パネル上部に実行時の手法・基底と全エネルギー（hartree / Eh）が表示されます。「計算記録」を開くとエンジン版・計算時間・job ID・入力SHA-256を確認できます。
 5. 保存アイコンで現在の分子と結果を保存します。再読込アイコンで保存時点に戻せます。再起動後も同じ保存先から再読込できます。
 
 分子の取り込みと再読込はUndo／Redoに対応します。異なる分子へ切り替えると古い計算結果は消え、Undoでは元の構造と対応する結果を一緒に復元します。履歴は最大32段で、アプリ終了時に破棄します。
@@ -119,6 +119,8 @@ English: Move result/history panels to the side or lower dock, group them as tab
 简体中文：结果和历史面板可停靠到右侧或底部、合并为标签页、调整侧栏宽度，或在原生独立窗口中显示。关闭独立窗口会返回原停靠区。重启后恢复布局，所有窗口共享同一Rust文档。独立窗口的位置和大小会恢复并调整到当前屏幕的工作区域，重新显示可找回屏幕外的窗口。分子视图分离尚未实现。
 
 ## 分子の3D表示
+
+分子式・原子数・電荷・スピン多重度を3D表示の上にまとめています。計算パネルでは結果に続けて次の計算条件を表示し、MACE・溶媒・分子動力学・AI研究は「その他のワークフロー」から開けます。
 
 macOSではRustが所有するwgpu / Metal描画面をWebViewの予約領域に重ねます。原子配列・メッシュ・描画フレームはJavaScriptへ転送しません。H₂Oサンプルで球棒モデルの奥行きと元素色を確認できます。
 
@@ -597,3 +599,122 @@ uv run --project worker --locked python -m reactqm_worker mace-reference-batch \
 - 力差が2.00 eV/Åを超え、32基底関数以下で予算3ならCCSD(T)を選びます。他の対象構造には予算1以上でMP2を選びます。
 
 予算は相対的な計算単位です。相関計算は固定座標の全電子RHF参照単一点で、未収束時は失敗を記録します。MACEとDFTの力差は追加計算を始めるための目安です。単一参照の妥当性や相関法の物理精度は別途評価が必要です。
+
+## AIを使った研究
+
+計算パネルの「研究」で接続先、モデルID、質問を選びます。計算結果の概要を含める場合は、添付のチェックを入れて送信します。添付データは分子式、電荷、スピン、手法・基底、エンジン、計算条件、エネルギー、収束・判定情報です。座標や成果物ファイルは送信しません。応答はテキストとして表示します。
+
+| 接続先 | アプリの起動環境 |
+|---|---|
+| Google Gemini API | `GEMINI_API_KEY` |
+| OpenAI API | `OPENAI_API_KEY` |
+| ローカルのOpenAI互換サーバー | `REACTQM_LOCAL_API`（既定 `http://127.0.0.1:11434/v1`）、認証が必要なら `REACTQM_LOCAL_API_KEY` |
+
+ローカル接続先は `127.0.0.1` または `[::1]` のHTTP `/v1` に限定されます。APIキーは環境変数から読み取ります。利用できるモデルIDは各接続先で確認してください。
+
+### CodexとGoogle Antigravity 2.0から研究する
+
+プロジェクトルートで任意のMCP依存をインストールします。
+
+```sh
+uv sync --project worker --locked --extra research
+```
+
+Codexにローカルstdioサーバーを登録します。下記の絶対パスは自分のチェックアウトに合わせてください。
+
+```sh
+codex mcp add reactqm -- /absolute/path/to/ReactQM/worker/.venv/bin/python -m reactqm_worker research-mcp
+```
+
+**Google Antigravity 2.0の単体アプリ**では、SettingsのInstalled MCP Serversから `mcp_config.json` を編集し、次のエントリーを追加します。
+
+```json
+{
+  "mcpServers": {
+    "reactqm": {
+      "command": "/absolute/path/to/ReactQM/worker/.venv/bin/python",
+      "args": ["-m", "reactqm_worker", "research-mcp"],
+      "timeoutSeconds": 75
+    }
+  }
+}
+```
+
+MCPは入力XYZ（Å）からH〜Ne、1〜16原子の中性閉殻RHF／PBE0単一点計算を実行できます。計算は独立した一時Workerで行います。例として「H₂の結合距離0.74 ÅでRHF／STO-3Gの単一点計算をし、結果をEhで示して」と依頼できます。
+
+保存済み結果も使う場合は、MCPサーバーの環境変数 `REACTQM_MCP_CATALOG` に `jobs.sqlite3` があるReactQMデータディレクトリの絶対パスを設定します。たとえば macOS の既定構成では `~/Library/Application Support/dev.reactqm.desktop` を絶対パスに展開して指定します。Codexのサーバー設定では `env`、Antigravityでは上記サーバーエントリー内の `env` に指定できます。この設定で完了ジョブの一覧と、レシート検証済みの結果概要を読み取れます。
+
+オンデマンド計算はデスクトップの待機列や編集状態と独立しています。MCPはローカルstdioで動き、クライアントの必要に応じて起動します。
+
+[Codex MCP設定](https://developers.openai.com/codex/mcp) · [Google Antigravity MCP設定](https://antigravity.google/docs/mcp?app=antigravity)
+
+## リモートWorkerの実行契約
+
+POSIX環境で、ローカル保存の単一点ジョブ入力を別のWorkerプロセスに送れます。送信先ホストでWorkerを起動し、`REACTQM_REMOTE_TOKEN` に32文字以上のランダムな共有トークンを設定します。クライアントにも同じ値を設定します。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker remote-serve \
+  --output-dir ./remote-jobs --port 18765
+```
+
+待受は `127.0.0.1` 固定です。別ホストではSSHポート転送を使います。
+
+```sh
+ssh -N -L 18765:127.0.0.1:18765 user@worker-host
+```
+
+転送を開いた状態で、履歴に保存された単一点ジョブの `input.json` を指定します。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker remote-run \
+  --input /path/to/job/input.json --output-dir ./retrieved-job --port 18765
+```
+
+対応範囲は1〜16原子、H〜Ne、RHF／UHF／RKS／UKSの単一点です。同じジョブIDと同じ内容を再送すると既存のジョブを返します。内容が違えば409です。Workerは同一ジョブを最大2回試行し、再起動で中断された試行もこの上限に含めます。クライアントの待機がタイムアウトした場合は、同じ入力で再実行して続きを取得できます。取得時は入力・結果の照合と3成果物のサイズ・SHA-256を確認し、新規ディレクトリに保存します。
+
+同じジョブIDを指定して取消を要求できます。待機中は即時に取消済みになり、実行中は取消処理中に移って子プロセスの停止後に取消済みになります。同じIDで再送できます。先に完了したジョブでは完了状態を返します。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker remote-cancel \
+  --job-id <UUID> --port 18765
+```
+
+同じトークンを環境変数に設定してデスクトップアプリを起動すると、上部の実行先で「リモートWorker」を選んで単一点計算を待機列に追加できます。デスクトップからは `127.0.0.1:18765` に接続します。投入時の実行先は待機列と履歴に残り、履歴から再計算すると新しいジョブIDで同じ実行先を使います。固定ツールバーには接続中・Workerで待機中・計算中・結果取得中・再接続中・取消処理中を表示します。アプリはリモート成果物を検証してからローカル履歴を完了にします。実行中の取消はリモートへ転送され、通信断などで受理を確認できない場合は履歴にエラーを残します。
+
+強制終了などで実行中のリモートジョブが中断された場合は、元のジョブIDと投入順で待機列に戻ります。上部の「待機列を再開」を押すと同じIDで接続し、リモート側が完了済みなら成果物を取得します。すでにローカルに有効な完了記録がある場合は再接続せず復元します。復旧待ちのジョブを待機列から取り除いた場合や、取消処理中にアプリが強制終了した場合は、リモートでの取消未確認として履歴に残ります。取消未確認のジョブがある場合は、接続先を復旧してから「待機列を再開」を押すと、通常の計算より先に同じIDで取消を再送します。通信障害が続く場合は待機列を再び一時停止します。Workerで取消済みを確認した場合は履歴も取消済みになります。成果物の保管量は、Workerホストで確認できます。ジョブの状態別件数、SQLiteのファイルサイズ、公開済み・未公開の成果物の使用量をJSONで返します。実行中のWorkerと並行して確認できますが、ファイルサイズは走査時点の概算です。未公開には実行中の試行も含まれます。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker remote-storage \
+  --output-dir ./remote-jobs
+```
+
+Workerを停止してから、SQLiteと公開済み成果物を新しいディレクトリへ書き出せます。アーカイブ先は既存ストアの外に指定します。書き出しに成功したディレクトリは `remote-serve --output-dir` に指定できます。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker remote-archive \
+  --output-dir ./remote-jobs --archive-dir ./remote-jobs-backup
+```
+
+書き出し時にSQLiteの整合性と、公開済み成果物のサイズ・SHA-256を確認します。未公開の試行ファイルや認証トークンはアーカイブに含まれません。転送後や復元前は、停止中のアーカイブを読み取り専用で再照合できます。破損または欠落が見つかるとエラーで終了します。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker remote-verify-archive \
+  --archive-dir ./remote-jobs-backup
+```
+
+元のWorkerとアーカイブを停止した状態で、保管期限を過ぎた成果物の整理候補を確認できます。例では、元の成果物の最終更新から90日以上経過し、別ストアのアーカイブに同じジョブID・入力ダイジェスト・成果物があるジョブを表示します。候補のIDと容量をJSONで返します。このコマンドは読み取り専用です。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker remote-retention-plan \
+  --output-dir ./remote-jobs --archive-dir ./remote-jobs-backup --retain-days 90
+```
+
+両方のWorkerを停止してから、候補のジョブIDを1件指定して元ストアの成果物を整理できます。実行時にも保管日数とファイルを再照合します。元ストアのジョブ履歴は `archived` として残り、成果物はアーカイブ側に残ります。
+
+```sh
+uv run --project worker --locked python -m reactqm_worker remote-retention-apply \
+  --output-dir ./remote-jobs --archive-dir ./remote-jobs-backup \
+  --retain-days 90 --job-id '対象のUUID'
+```
+
+状態更新後に整理が中断された場合は、同じID・保管日数・アーカイブを指定して再実行できます。アーカイブと残存ファイルを再照合し、今回削除したバイト数を返します。

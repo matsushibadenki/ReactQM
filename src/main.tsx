@@ -1,3 +1,4 @@
+import { Research } from './Research';
 import { XtbQueue, XtbResult, type XtbReport } from './XtbFollowup';
 import { EscalationQueue, EscalationResult, type EscalationReport } from './Escalation';
 import { ReferenceResult, type ReferenceSelection } from './MaceReference';
@@ -77,6 +78,7 @@ function App() {
   const [dismissedJobError, setDismissedJobError] = useState<string | null>(null);
   const [notice, setNotice] = useState<'saved' | 'loaded' | 'imported' | null>(null);
   const [pending, setPending] = useState(false);
+  const [executionTarget, setExecutionTarget] = useState<'local' | 'remote'>('local');
   const [draft, setDraft] = useState('');
   const [format, setFormat] = useState<InputFormat>('smiles');
   const [seed, setSeed] = useState('42');
@@ -131,11 +133,11 @@ function App() {
   const shownError = error ?? layout.error ?? (dismissedJobError === snapshot.job?.id ? null : jobError);
   const result = snapshot.calculation;
 
-  const moleculePanel = (      <section aria-labelledby="molecule-title">
+  const moleculePanel = (      <section className="molecule-inspector" aria-labelledby="molecule-title">
         <div className="heading"><h2 id="molecule-title">{t.molecule}</h2>{snapshot.dirty ? <span className="dirty" aria-label={t.unsaved} title={t.unsaved}>●</span> : null}</div>
-        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} manualBonds={snapshot.manualBonds} result={result?.transition || result?.thermochemistry || result?.refinement || result?.solution || result?.stoichiometry || result?.mace || result?.mace_reference || result?.escalation || result?.xtb_followup ? null : result} editingDisabled={locked} onEdit={edit => void command('edit_molecule', { edit })} />
         <div className="molecule-summary"><strong className="formula">{snapshot.formula || '—'}</strong><span>{snapshot.atomCount ? snapshot.name || t.untitled : t.empty}</span></div>
         <dl className="metrics"><div><dt>{t.atoms}</dt><dd>{snapshot.atomCount}</dd></div><div><dt>{t.charge} <Info text={t.chargeHelp} /></dt><dd>{snapshot.charge === 0 ? `0 · ${t.neutral}` : snapshot.charge > 0 ? `+${snapshot.charge}` : `−${Math.abs(snapshot.charge)}`}</dd></div><div><dt>{t.spin} <Info text={t.spinHelp} /></dt><dd>{snapshot.atomCount ? snapshot.spin + 1 : '—'}</dd></div></dl>
+        <MoleculeViewport locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} manualBonds={snapshot.manualBonds} result={result?.transition || result?.thermochemistry || result?.refinement || result?.solution || result?.stoichiometry || result?.mace || result?.mace_reference || result?.escalation || result?.xtb_followup ? null : result} editingDisabled={locked} onEdit={edit => void command('edit_molecule', { edit })} />
         {snapshot.atomCount ? <form key={snapshot.documentRevision} className="input-row multiplicity-editor" onSubmit={event => {
           event.preventDefault();
           const value = Number(new FormData(event.currentTarget).get('multiplicity'));
@@ -150,14 +152,16 @@ function App() {
         <ReactionEndpoints locale={snapshot.locale} documentRevision={snapshot.documentRevision} atomCount={snapshot.atomCount} locked={locked} />
       </section>);
   const panels = {
-    result: <><div className="result-help"><Info text={(result?.method ?? snapshot.settings?.method) === 'GFN2-xTB' ? t.screeningHelp : t.calculationHelp} /></div>        <CalculationControls settings={snapshot.settings ?? defaultSettings} locale={snapshot.locale} spin={snapshot.spin} disabled={locked} onChange={settings => void command('set_calculation_settings', { settings })} />
-        <MaceQueue locale={snapshot.locale} scopeError={snapshot.maceScopeError} disabled={locked || snapshot.atomCount === 0} queue={() => void command('start_mace', {})} />
-        <SolutionQueue locale={snapshot.locale} disabled={locked || snapshot.atomCount < 2 || snapshot.atomCount > 10 || snapshot.spin !== 0 || snapshot.settings?.method !== 'RHF'} queue={solvent => void command('start_solution', { solvent })} />
-        <DynamicsQueue locale={snapshot.locale} disabled={locked || snapshot.atomCount < 2 || snapshot.atomCount > 10 || snapshot.settings?.method === 'GFN2-xTB'} queue={input => void command('start_dynamics', { input })} />
+    result: <>
         <div className="calculation-actions">
           <span className="job-status" role="status">{result?.escalation || result?.xtb_followup ? null : result ? t.succeeded : t.noResult}</span>
+          {result && <Info text={result.method === 'GFN2-xTB' ? t.screeningHelp : t.calculationHelp} />}
         </div>
         {result?.xtb_followup ? <XtbResult report={result.xtb_followup} energy={result.energy_hartree} locale={snapshot.locale} /> : result?.escalation ? <EscalationResult report={result.escalation} energy={result.energy_hartree} locale={snapshot.locale} /> : result?.mace_reference ? <><EscalationQueue locale={snapshot.locale} disabled={locked} submit={budget => void command('start_escalation', { id: result.job_id, budget })} /><ReferenceResult key={result.job_id} selection={result.mace_reference.selection} locale={snapshot.locale} jobId={result.job_id} atomCount={snapshot.atomCount} revision={snapshot.documentRevision} energy={result.energy_hartree} engineVersion={result.engine_version} /></> : result?.mace ? <MaceDetails key={result.job_id} report={result.mace} locale={snapshot.locale} jobId={result.job_id} atomCount={snapshot.atomCount} revision={snapshot.documentRevision} engineVersion={result.engine_version} /> : result?.stoichiometry ? <StoichiometryResult locale={snapshot.locale} report={result.stoichiometry} /> : result ? <div className="result">
+          <div className="result-overview">
+            <div className="method">{result.dynamics ? `${ensembleName(result.dynamics.input.ensemble)} · ${conditionLabel(result.settings ?? defaultSettings)}` : result.refinement ? `${refinementName(result.refinement.method)} / ${result.basis.toUpperCase()}` : result.settings ? conditionLabel(result.settings) : `${result.method} / ${result.basis.toUpperCase()}`}</div>
+            <span className="eyebrow">{result.neb ? `${t.reactant} · ${t.energy}` : t.energy}</span><div className="energy"><output>{result.energy_hartree.toFixed(10)}</output><span>Eh</span></div>
+          </div>
           {result.method === "GFN2-xTB" && result.xtb_max_force === undefined ? <small>{errorMessage("xtb_followup_force_missing", snapshot.locale)}</small> : null}
           {result.xtb_max_force !== undefined ? <>
             <p>{t.maximumForce} · {result.xtb_max_force.toFixed(3)} eV/Å</p>
@@ -178,12 +182,21 @@ function App() {
           {result.solution_path ? <SolutionBarriers report={result.solution_path} energy={result.energy_hartree} locale={snapshot.locale} /> : null}
           {result.solution ? <SolutionDetails report={result.solution} locale={snapshot.locale} /> : null}
           {result.optimization ? <p className="job-status">{t.optimizeStructure} · ASE BFGS {result.optimization.ase_version} · {t.optimizationStep} {result.optimization.steps} · {t.maximumForce} {result.optimization.max_force_ev_per_angstrom.toPrecision(3)} eV/Å</p> : null}
-          <div className="method">{result.dynamics ? `${ensembleName(result.dynamics.input.ensemble)} · ${conditionLabel(result.settings ?? defaultSettings)}` : result.refinement ? `${refinementName(result.refinement.method)} / ${result.basis.toUpperCase()}` : result.settings ? conditionLabel(result.settings) : `${result.method} / ${result.basis.toUpperCase()}`}</div>
-          <span className="eyebrow">{result.neb ? `${t.reactant} · ${t.energy}` : t.energy}</span><div className="energy"><output>{result.energy_hartree.toFixed(10)}</output><span>Eh</span></div>
-          <dl>{result.spin_squared !== undefined ? <div><dt>⟨S²⟩ <Info text={t.spinSquaredHelp} /></dt><dd>{result.spin_squared.toFixed(4)} / {(snapshot.spin * (snapshot.spin + 2) / 4).toFixed(4)}</dd></div> : null}<div><dt>{t.engine}</dt><dd>{result.method === 'GFN2-xTB' ? 'tblite' : 'PySCF'} {result.engine_version}</dd></div><div><dt>{t.elapsed}</dt><dd>{result.elapsed_seconds.toFixed(2)} s</dd></div></dl>
-          <details><summary>{t.provenance}</summary><code>{result.job_id}</code><code>SHA-256 {result.input_hash}</code>{result.method === 'GFN2-xTB' ? <code>SCC ≤ 250 · {t.screeningAccuracy} 1.0 · 300 K</code> : result.settings ? <code>SCF ≤ {result.settings.max_cycle} · {result.settings.conv_tol.toExponential()} Eh{result.settings.grid_level ? ` · Grid ${result.settings.grid_level}` : ''}</code> : null}</details>
+          {result.spin_squared !== undefined ? <dl><div><dt>⟨S²⟩ <Info text={t.spinSquaredHelp} /></dt><dd>{result.spin_squared.toFixed(4)} / {(snapshot.spin * (snapshot.spin + 2) / 4).toFixed(4)}</dd></div></dl> : null}
+          <details><summary>{t.provenance}</summary><dl><div><dt>{t.engine}</dt><dd>{result.method === 'GFN2-xTB' ? 'tblite' : 'PySCF'} {result.engine_version}</dd></div><div><dt>{t.elapsed}</dt><dd>{result.elapsed_seconds.toFixed(2)} s</dd></div></dl>
+          <code>{result.job_id}</code><code>SHA-256 {result.input_hash}</code>{result.method === 'GFN2-xTB' ? <code>SCC ≤ 250 · {t.screeningAccuracy} 1.0 · 300 K</code> : result.settings ? <code>SCF ≤ {result.settings.max_cycle} · {result.settings.conv_tol.toExponential()} Eh{result.settings.grid_level ? ` · Grid ${result.settings.grid_level}` : ''}</code> : null}</details>
         </div> : null}
-</>,
+        <div className="next-run">
+          <CalculationControls settings={snapshot.settings ?? defaultSettings} locale={snapshot.locale} spin={snapshot.spin} disabled={locked} onChange={settings => void command('set_calculation_settings', { settings })} />
+          <details className="workflow-tools">
+            <summary>{t.additionalWorkflows}</summary>
+            <MaceQueue locale={snapshot.locale} scopeError={snapshot.maceScopeError} disabled={locked || snapshot.atomCount === 0} queue={() => void command('start_mace', {})} />
+            <SolutionQueue locale={snapshot.locale} disabled={locked || snapshot.atomCount < 2 || snapshot.atomCount > 10 || snapshot.spin !== 0 || snapshot.settings?.method !== 'RHF'} queue={solvent => void command('start_solution', { solvent })} />
+            <DynamicsQueue locale={snapshot.locale} disabled={locked || snapshot.atomCount < 2 || snapshot.atomCount > 10 || snapshot.settings?.method === 'GFN2-xTB'} queue={input => void command('start_dynamics', { input })} />
+            <Research locale={snapshot.locale} enabled={connected} hasResult={!!result} />
+          </details>
+        </div>
+    </>,
     history: <JobHistory locale={snapshot.locale} busy={locked} queueState={queue} onAction={command} />,
   };
 
@@ -214,7 +227,10 @@ function App() {
           <Info text={t.saveHelp} />
         </div>
         <button type="button" disabled={locked || snapshot.atomCount < 2 || snapshot.settings?.method === 'GFN2-xTB'} onClick={() => void command('start_optimization')} title={snapshot.settings?.method === 'GFN2-xTB' ? t.screeningHelp : t.optimizationHelp}>{t.enqueueOptimization}</button>
-        <button className="primary enqueue-button" disabled={locked || !snapshot.atomCount} onClick={() => void command('start_calculation')}><Icon name="play" />{t.enqueue}</button>
+        <select aria-label={t.executionTarget} value={executionTarget} onChange={event => setExecutionTarget(event.target.value === 'remote' ? 'remote' : 'local')}>
+          <option value="local">{t.localWorker}</option><option value="remote">{t.remoteWorker}</option>
+        </select>
+        <button className="primary enqueue-button" disabled={locked || !snapshot.atomCount} onClick={() => void command('start_calculation', { remotePort: executionTarget === 'remote' ? 18765 : null })}><Icon name="play" />{t.enqueue}</button>
         <LayoutTools state={layout} locale={snapshot.locale} />
       </nav> : null}
       {!windowPanel ? <QueueToolbar locale={snapshot.locale} state={queue} job={snapshot.job} disabled={locked} onAction={command} /> : null}

@@ -26,3 +26,6 @@ screening = [
 transition = [
     "sella>=2.3,<3",
 ]
+research = [
+    "mcp>=1.26,<2",
+]

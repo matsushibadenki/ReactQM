@@ -29,6 +29,8 @@ pub struct JobRequest {
     pub max_cycle: u32,
     pub conv_tol: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<crate::settings::CalculationSettings>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub optimize: bool,
@@ -61,6 +63,26 @@ fn is_false(value: &bool) -> bool {
 impl JobRequest {
     pub fn validate(&self) -> Result<(), String> {
         self.document.validate()?;
+        if let Some(port) = self.remote_port {
+            if port == 0
+                || !(1..=16).contains(&self.document.atoms.len())
+                || !matches!(self.method.as_str(), "RHF" | "UHF" | "RKS" | "UKS")
+                || self.optimize
+                || self.neb.is_some()
+                || self.transition.is_some()
+                || self.thermochemistry.is_some()
+                || self.refinement.is_some()
+                || self.dynamics.is_some()
+                || self.solution.is_some()
+                || self.solution_path.is_some()
+                || self.stoichiometry.is_some()
+                || self.mace_reference.is_some()
+                || self.escalation.is_some()
+                || self.xtb_followup.is_some()
+            {
+                return Err("remote_scope".into());
+            }
+        }
         if let Some(policy) = &self.xtb_followup {
             if !policy.valid(&self.document)
                 || self.effective_settings() != policy.settings()
@@ -374,6 +396,7 @@ impl JobRequest {
             basis: "sto-3g".into(),
             max_cycle: 50,
             conv_tol: 1e-9,
+            remote_port: None,
             settings: None,
             optimize: false,
             neb: None,
@@ -454,6 +477,9 @@ pub fn execute(
     request.validate()?;
     fs::create_dir_all(directory).map_err(|e| format!("storage: {e}"))?;
     atomic_json(&directory.join("input.json"), request)?;
+    if let Some(port) = request.remote_port {
+        return crate::remote_worker::execute(request, directory, config, &cancel, port, progress);
+    }
     let python = if request.method == crate::mace::METHOD {
         std::env::var_os("REACTQM_MACE_PYTHON")
             .map(PathBuf::from)

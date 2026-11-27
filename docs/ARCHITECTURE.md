@@ -79,6 +79,8 @@ jobs/<UUID>/status.json       Compatibility terminal-state manifest
 jobs/<UUID>/completion.json   SHA-256 / byte lengths of input.json, result.json, result.h5
 ```
 
+The catalog keeps legacy import and reindexing in its private `catalog/legacy.rs` module, under the same workspace lease.
+
 Project JSON is written to a unique temporary file, synced and atomically renamed. Saved project reads are capped at 128 KiB and revalidated before replacing live state. A damaged file leaves the current project unchanged. Save is explicit; after restart, Reload reads the last saved project. It is a single workspace slot, not a project browser.
 
 Successful Worker artifacts are closed/synced and atomically renamed before the result event. `Catalog::enqueue` persists the immutable request and a `queued` SQLite row; `claim_next` uses an immediate transaction to check pause/active status and promote the oldest sequence to running before spawning a Worker. Waiting cancellation uses a conditional status update, so it cannot cancel an already claimed job or a different job. Each UUID has a separate directory. The index stores input/settings, display metadata, timestamps, status, errors, scalar energy, retry ancestry and the completion receipt hash. Floating-point JSON round trips are enabled so persisted coordinates preserve input identity.
@@ -310,3 +312,29 @@ The correlated escalation command restores the DFT and MACE receipts, checks exa
 
 
 The xTB follow-up policy uses the source receipt's maximum nuclear force to triage fixed geometries for DFT. Rust freezes its versioned scope decision, source ID, force and budget in the queued request. The Worker either runs PBE0 at the same geometry and retains the new gradient or writes a decision-only receipt. Legacy xTB receipts remain restorable and can be rerun to obtain the force summary.
+
+## AI research access
+
+The desktop research panel sends explicit prompts through a bounded Rust-managed Worker process. Gemini and OpenAI use fixed HTTPS origins, while the OpenAI-compatible local adapter accepts loopback endpoints only. Provider credentials come from the launch environment. An optional scalar result summary is attached by the user's action.
+
+An opt-in Python SDK MCP server exposes isolated PySCF single points over stdio for agent clients. It can also read a configured desktop SQLite catalog in read-only mode and verify result JSON against the catalog-bound receipt before returning a bounded summary. Coordinate arrays, field data and desktop mutations are outside this transport's interface.
+
+## Remote Worker contract
+
+The opt-in remote CLI uses a dedicated SQLite queue and the existing Python single-point protocol. It binds to IPv4 loopback, requires a bearer token and permits a fixed HTTP route set. The dispatcher acquires the same POSIX store lease as archive and retention operations before initializing SQLite. File names and size limits are shared by the HTTP client, dispatcher and offline tools. Canonical request hashes bind immutable job IDs, with a bounded restart/retry budget. Completed rows expose a checksummed artifact manifest. The client verifies those bytes and the unchanged request identity before publishing a new local retrieval directory. Transport over another host uses a user-configured SSH tunnel.
+
+Authenticated `DELETE /v1/jobs/{id}` cancels queued work and records `cancelling` for running work. The dispatcher stops and reaps the child before recording `cancelled`. The success commit is conditional on the row still being `running`. Recovery resolves `cancelling` as `cancelled`; repeated cancellation returns the existing state.
+
+The desktop stores the selected loopback port with the immutable single-point request. The scheduler invokes the bounded Python client, then Rust checks the downloaded manifest, artifact digests, original request identity and scalar result before passing through the existing catalog completion gate. The token is inherited from the environment. A bounded cancellation call targets the same remote UUID. An unconfirmed cancellation becomes a local failure with a specific error. The client retries interrupted submission and polling with the same ID during a run. After an unclean desktop exit, recovery first honors a valid local receipt. Otherwise, a running remote job returns to the paused FIFO with its original sequence and UUID. Resume repeats the idempotent submission and verified download. Staging paths are unique per invocation so a surviving client cannot collide with its replacement. Removing a recovered waiting job or restarting mid-cancellation records unconfirmed cancellation. The scheduler retries durable unconfirmed cancellations before claiming new jobs when the queue resumes. It waits for remote cancellation to settle, preserves unconfirmed requests across transport errors, and pauses the queue again on those errors. A terminal response or missing ID settles the retry with a distinct history error.
+
+Desktop invocations request a private phase stream on stdout. The client emits one byte per phase change, and Rust retains the latest valid phase for the existing active-job snapshot. The remote toolbar interprets those values as phases, while local jobs continue to report calculation cycles.
+
+The host-local `remote-storage` command reads state counts and published directory names in one read-only SQLite transaction, then measures regular files in the Worker store. The filesystem scan is advisory while dispatch is active. Unpublished directories can belong to active attempts. The command does not remove files or mutate queue rows.
+
+The host-local `remote-archive` command acquires the stopped store’s dispatcher lease and creates a new Worker store using SQLite backup and the published artifact manifests. It validates the database and verifies copied file lengths and hashes before renaming the staged store into place. Unpublished attempt files are excluded.
+
+`remote-verify-archive` applies the same SQLite and artifact checks to an existing offline archive through a read-only connection. It reports aggregate counts only after all published artifacts pass verification.
+
+The advisory `remote-retention-plan` command opens separate stopped stores read-only, checks the archive, and matches successful source rows by UUID, request digest and artifact manifest. It verifies matching source files and measures age from the newest original artifact mtime. The report includes candidate UUIDs and logical bytes.
+
+`remote-retention-apply` holds both offline store leases, reruns eligibility checks and archives one explicit UUID in SQLite before unlinking the known artifact files. The archived row retains the request digest and manifest. After interruption, repeating the command verifies the archive and the remaining original files before completing cleanup.

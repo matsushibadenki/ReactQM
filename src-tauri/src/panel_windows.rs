@@ -2,7 +2,7 @@
 use crate::{
     catalog::CatalogState,
     layout::{Action, Panel, PanelLayout, Zone},
-    state::AppState,
+    state::{AppState, Locale},
 };
 use serde::Serialize;
 use std::sync::{
@@ -51,9 +51,7 @@ fn publish(app: &tauri::AppHandle) -> Result<LayoutView, String> {
     let _ = app.emit("layout-changed", &snapshot);
     Ok(snapshot)
 }
-fn title(app: &tauri::AppHandle, panel: Panel) -> String {
-    use crate::state::Locale;
-    let locale = app.state::<AppState>().0.lock().unwrap().locale;
+fn title(panel: Panel, locale: Locale) -> String {
     let name = match (panel, locale) {
         (Panel::Result, Locale::En) => "Calculation",
         (Panel::Result, Locale::Ja) => "計算",
@@ -64,10 +62,10 @@ fn title(app: &tauri::AppHandle, panel: Panel) -> String {
     };
     format!("ReactQM · {name}")
 }
-pub fn update_titles(app: &tauri::AppHandle) {
+pub fn update_titles(app: &tauri::AppHandle, locale: Locale) {
     for panel in Panel::ALL {
         if let Some(window) = app.get_webview_window(panel.label()) {
-            let _ = window.set_title(&title(app, panel));
+            let _ = window.set_title(&title(panel, locale));
         }
     }
 }
@@ -75,12 +73,18 @@ fn create(app: &tauri::AppHandle, panel: Panel) -> Result<tauri::WebviewWindow, 
     if let Some(window) = app.get_webview_window(panel.label()) {
         return Ok(window);
     }
+    let locale = app
+        .state::<AppState>()
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .locale;
     let window = tauri::WebviewWindowBuilder::new(
         app,
         panel.label(),
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title(title(app, panel))
+    .title(title(panel, locale))
     .inner_size(480.0, 640.0)
     .min_inner_size(360.0, 320.0)
     .center()
@@ -135,7 +139,7 @@ async fn change(
         _ => redock,
     };
     let reset = matches!(action, Some(Action::Reset));
-    if service.error.lock().unwrap().is_some() && !reset {
+    if service.error.lock().map_err(|e| e.to_string())?.is_some() && !reset {
         return Err("layout_invalid".into());
     }
     let next = if let Some(panel) = redock {
@@ -182,7 +186,7 @@ async fn change(
         .lock()
         .map_err(|e| e.to_string())?
         .layout = next.clone();
-    *service.error.lock().unwrap() = None;
+    *service.error.lock().map_err(|e| e.to_string())? = None;
     for panel in Panel::ALL {
         if next.zone(panel) != Zone::Floating {
             if let Some(window) = app.get_webview_window(panel.label()) {
@@ -193,7 +197,8 @@ async fn change(
     let snapshot = publish(app)?;
     for window in created {
         if let Err(error) = window.show() {
-            *service.error.lock().unwrap() = Some(format!("panel_window: {error}"));
+            *service.error.lock().map_err(|e| e.to_string())? =
+                Some(format!("panel_window: {error}"));
             return publish(app);
         }
         let _ = window.set_focus();
@@ -225,7 +230,7 @@ async fn change(
     }
     Ok(snapshot)
 }
-pub fn setup(app: &tauri::AppHandle) {
+pub fn setup(app: &tauri::AppHandle) -> Result<(), String> {
     let result = (|| {
         app.state::<CatalogState>().get()?;
         let path = crate::storage_directory(app)?.join("layout.json");
@@ -236,24 +241,37 @@ pub fn setup(app: &tauri::AppHandle) {
         }
     })();
     match result {
-        Ok(layout) => app.state::<AppState>().0.lock().unwrap().layout = layout,
-        Err(error) => *app.state::<LayoutService>().error.lock().unwrap() = Some(error),
+        Ok(layout) => {
+            app.state::<AppState>()
+                .0
+                .lock()
+                .map_err(|e| e.to_string())?
+                .layout = layout
+        }
+        Err(error) => {
+            *app.state::<LayoutService>()
+                .error
+                .lock()
+                .map_err(|e| e.to_string())? = Some(error)
+        }
     }
     if let Err(error) = crate::window_geometry::setup(app) {
-        *app.state::<LayoutService>().error.lock().unwrap() = Some(error);
+        *app.state::<LayoutService>()
+            .error
+            .lock()
+            .map_err(|e| e.to_string())? = Some(error);
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let service = app.state::<LayoutService>();
         let _gate = service.gate.lock().await;
-        let panels = app
-            .state::<AppState>()
-            .0
-            .lock()
-            .unwrap()
-            .layout
-            .panels
-            .clone();
+        let panels = match view(&app) {
+            Ok(snapshot) => snapshot.layout.panels,
+            Err(error) => {
+                let _ = app.emit("panel-error", error);
+                return;
+            }
+        };
         for placement in panels {
             if service.closing.load(Ordering::SeqCst) {
                 break;
@@ -262,12 +280,21 @@ pub fn setup(app: &tauri::AppHandle) {
                 if let Err(error) = create(&app, placement.id)
                     .and_then(|window| window.show().map_err(|e| format!("panel_window: {e}")))
                 {
-                    *service.error.lock().unwrap() = Some(error);
+                    match service.error.lock() {
+                        Ok(mut stored) => *stored = Some(error),
+                        Err(poisoned) => {
+                            let _ = app.emit("panel-error", poisoned.to_string());
+                            return;
+                        }
+                    }
                 }
             }
         }
-        let _ = publish(&app);
+        if let Err(error) = publish(&app) {
+            let _ = app.emit("panel-error", error);
+        }
     });
+    Ok(())
 }
 pub fn close_requested(app: &tauri::AppHandle, panel: Panel, api: &tauri::CloseRequestApi) {
     if app.state::<LayoutService>().closing.load(Ordering::SeqCst) {

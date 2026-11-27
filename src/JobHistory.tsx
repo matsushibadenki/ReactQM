@@ -1,9 +1,9 @@
-import { XtbReason, xtbDecision, type XtbPolicy } from './XtbFollowup';
-import { EscalationReason, decisionLabel, type Policy } from './Escalation';
-import { ReferenceReason, referenceLabels, type ReferenceSelection } from './MaceReference';
+import { XtbReason, xtbDecision } from './XtbFollowup';
+import { EscalationReason, decisionLabel } from './Escalation';
+import { ReferenceReason, referenceLabels } from './MaceReference';
 import { StoichiometryQueue, stoichiometryLabels } from './Stoichiometry';
-import { solventLabel, type Solvent } from './Solution';
-import { ensembleName, type DynamicsInput } from './Dynamics';
+import { solventLabel } from './Solution';
+import { ensembleName } from './Dynamics';
 import { refinementName } from './Refinement';
 import { RateComparison } from './RateComparison';
 import { BarrierComparison } from './BarrierComparison';
@@ -11,11 +11,19 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { messages, errorMessage, type Locale } from './i18n';
-import { conditionLabel, type Settings } from './CalculationControls';
-import type { QueueProjection } from './useQueue';
+import { conditionLabel } from './CalculationControls';
+import type { QueueItem, QueueProjection } from './useQueue';
 
 type RecordStatus = 'queued' | 'running' | 'cancelling' | 'succeeded' | 'cancelled' | 'failed' | 'timed_out' | 'interrupted' | 'corrupt';
-type JobRecord = { xtbFollowup?: XtbPolicy | null; escalation?: Policy | null; maceReference?: ReferenceSelection | null; mace?: boolean; stoichiometry?: boolean; optimize?: boolean; dynamics?: DynamicsInput | null; solution?: Solvent | null; solutionPath?: Solvent | null; transition?: boolean; thermochemistry?: boolean; refinement?: 'mp2' | 'ccsdt' | null; neb?: boolean | null; multiplicity?: number | null; resumable?: boolean; settings?: Settings; sequence: number; id: string; name: string; formula: string; status: RecordStatus; createdAt: number; error: string | null; energyHartree: number | null; retryOf: string | null; legacy: boolean };
+type JobRecord = QueueItem & {
+  status: RecordStatus;
+  resumable?: boolean;
+  createdAt: number;
+  error: string | null;
+  energyHartree: number | null;
+  retryOf: string | null;
+  legacy: boolean;
+};
 type JobPage = { items: JobRecord[]; nextCursor: number | null };
 const restoreIcon = 'M4 10a8 8 0 1 1 0 5M4 4v6h6';
 const stopIcon = 'M5 5h14v14H5Z';
@@ -69,7 +77,7 @@ export function JobHistory({ locale, busy, queueState, onAction }: { locale: Loc
     </div>
     {!queue.items.length ? <p className="history-empty">{queueLoading ? t.connecting : t.queueEmpty}</p> : null}
     <ol className="queue-list" aria-label={t.queue} aria-busy={queueLoading}>
-      {queue.items.map(item => <li key={item.id}><div><strong>{item.formula}</strong><span>{item.name || t.untitled}</span><small>{t.queued}{item.xtbFollowup ? ` · ${xtbDecision(item.xtbFollowup, locale)}` : item.escalation ? ` · ${decisionLabel(item.escalation, locale)}` : item.maceReference ? ` · ${reference.title} #${item.maceReference.rank}` : item.mace ? ' · MACE-OFF23-small' : item.stoichiometry ? ` · ${stoichiometryLabels[locale].title}` : item.solutionPath ? ` · IRC · ${solventLabel(item.solutionPath, locale)}` : item.solution ? ` · ${solventLabel(item.solution, locale)}` : item.dynamics ? ` · ${ensembleName(item.dynamics.ensemble)}` : item.refinement ? ` · ${refinementName(item.refinement)}` : item.thermochemistry ? ` · ${t.thermalTitle}` : item.transition ? ` · ${t.transitionJob}` : item.neb != null ? ` · ${item.neb ? 'CI-NEB' : 'NEB'}` : item.optimize ? ` · ${t.optimizeStructure}` : ''}{item.settings ? ` · ${conditionLabel(item.settings)}${item.multiplicity ? ` · 2S+1 = ${item.multiplicity}` : ''}` : ''}</small></div>
+      {queue.items.map(item => <li key={item.id}><div><strong>{item.formula}</strong><span>{item.name || t.untitled}</span><small>{t.queued}{item.remotePort ? ` · ${t.remoteWorker}` : ''}{item.xtbFollowup ? ` · ${xtbDecision(item.xtbFollowup, locale)}` : item.escalation ? ` · ${decisionLabel(item.escalation, locale)}` : item.maceReference ? ` · ${reference.title} #${item.maceReference.rank}` : item.mace ? ' · MACE-OFF23-small' : item.stoichiometry ? ` · ${stoichiometryLabels[locale].title}` : item.solutionPath ? ` · IRC · ${solventLabel(item.solutionPath, locale)}` : item.solution ? ` · ${solventLabel(item.solution, locale)}` : item.dynamics ? ` · ${ensembleName(item.dynamics.ensemble)}` : item.refinement ? ` · ${refinementName(item.refinement)}` : item.thermochemistry ? ` · ${t.thermalTitle}` : item.transition ? ` · ${t.transitionJob}` : item.neb != null ? ` · ${item.neb ? 'CI-NEB' : 'NEB'}` : item.optimize ? ` · ${t.optimizeStructure}` : ''}{item.settings ? ` · ${conditionLabel(item.settings)}${item.multiplicity ? ` · 2S+1 = ${item.multiplicity}` : ''}` : ''}</small></div>
         <button type="button" title={t.cancelQueued} aria-label={`${t.cancelQueued}: ${item.name || item.formula}`} disabled={busy || acting} onClick={() => void act('cancel_queued_job', { id: item.id })}><Glyph path={stopIcon} /></button>
       </li>)}
     </ol>
@@ -110,7 +118,7 @@ export function JobHistory({ locale, busy, queueState, onAction }: { locale: Loc
           <div className="job-record-title"><strong>{job.formula}</strong><span>{job.name || t.untitled}</span></div>
           {job.xtbFollowup ? <small>{xtbDecision(job.xtbFollowup, locale)}</small> : job.escalation ? <small>{decisionLabel(job.escalation, locale)}</small> : job.maceReference ? <small>{reference.title} #{job.maceReference.rank}</small> : job.mace ? <small>MACE-OFF23-small</small> : job.stoichiometry ? <small>{stoichiometryLabels[locale].title}</small> : job.solutionPath ? <small>IRC · {solventLabel(job.solutionPath, locale)} </small> : job.solution ? <small>{solventLabel(job.solution, locale)} </small> : job.dynamics ? <small>{ensembleName(job.dynamics.ensemble)} </small> : job.refinement ? <small>{refinementName(job.refinement)} </small> : job.thermochemistry ? <small>{t.thermalTitle} </small> : job.transition ? <small>{t.transitionJob} </small> : job.neb != null ? <small>{job.neb ? 'CI-NEB' : 'NEB'} </small> : job.optimize ? <small>{t.optimizeStructure} </small> : null}{job.settings ? <small>{conditionLabel(job.settings)}{job.multiplicity ? ` · 2S+1 = ${job.multiplicity}` : ''}</small> : null}<div className="job-record-meta"><time dateTime={new Date(job.createdAt).toISOString()}>{new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(job.createdAt)}</time><span className={'job-status ' + job.status}>{t[job.status]}</span></div>
           {!job.stoichiometry && !job.mace && (!job.escalation || ['mp2','ccsdt'].includes(job.escalation.decision)) && (!job.xtbFollowup || job.xtbFollowup.decision === 'dft') && job.energyHartree !== null ? <div className="history-energy">{job.energyHartree.toFixed(10)} <small>Eh</small></div> : null}
-          <details><summary>{t.details}</summary><code>{job.id}</code>{job.xtbFollowup ? <XtbReason policy={job.xtbFollowup} locale={locale} /> : null}{job.escalation ? <EscalationReason policy={job.escalation} locale={locale} /> : null}{job.maceReference ? <ReferenceReason selection={job.maceReference} locale={locale} /> : null}{job.retryOf ? <p>{t.retryOf}<code>{job.retryOf}</code></p> : null}{job.legacy ? <p>{t.legacyRecord}</p> : null}{job.error ? <p>{errorMessage(job.error, locale)}</p> : null}</details>
+          <details><summary>{t.details}</summary><code>{job.id}</code>{job.remotePort ? <p>{t.remoteWorker} · 127.0.0.1:{job.remotePort}</p> : null}{job.xtbFollowup ? <XtbReason policy={job.xtbFollowup} locale={locale} /> : null}{job.escalation ? <EscalationReason policy={job.escalation} locale={locale} /> : null}{job.maceReference ? <ReferenceReason selection={job.maceReference} locale={locale} /> : null}{job.retryOf ? <p>{t.retryOf}<code>{job.retryOf}</code></p> : null}{job.legacy ? <p>{t.legacyRecord}</p> : null}{job.error ? <p>{errorMessage(job.error, locale)}</p> : null}</details>
         </div>
         <div className="job-record-actions">
           <button type="button" title={t.restoreResult} aria-label={`${t.restoreResult}: ${job.name || job.formula}`} disabled={busy || acting || job.status !== 'succeeded'} onClick={() => void act('restore_job', { id: job.id })}><Glyph path={restoreIcon} /></button>

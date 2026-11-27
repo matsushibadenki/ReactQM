@@ -1,3 +1,4 @@
+mod remote_worker;
 pub mod barriers;
 pub mod catalog;
 pub mod document;
@@ -16,6 +17,7 @@ pub mod rates;
 mod reaction;
 pub mod refinement;
 pub mod renderer;
+mod research;
 pub mod scheduler;
 pub mod settings;
 pub mod solution;
@@ -79,7 +81,7 @@ fn set_locale(
         workspace.revision += 1;
         workspace.snapshot()
     };
-    panel_windows::update_titles(&app);
+    panel_windows::update_titles(&app, locale);
     publish(&app, snapshot)
 }
 #[tauri::command]
@@ -230,8 +232,9 @@ fn set_calculation_settings(
 fn start_calculation(
     app: tauri::AppHandle,
     expected_revision: u64,
+    remote_port: Option<u16>,
 ) -> Result<WorkspaceSnapshot, String> {
-    launch_calculation(app, expected_revision, None, false)
+    launch_calculation(app, expected_revision, None, false, remote_port)
 }
 
 #[tauri::command]
@@ -527,7 +530,7 @@ fn start_optimization(
     app: tauri::AppHandle,
     expected_revision: u64,
 ) -> Result<WorkspaceSnapshot, String> {
-    launch_calculation(app, expected_revision, None, true)
+    launch_calculation(app, expected_revision, None, true, None)
 }
 
 #[tauri::command]
@@ -546,6 +549,7 @@ async fn resume_optimization(
             expected_revision,
             Some((request, Some(original.input_hash))),
             true,
+            None,
         )
     })
     .await
@@ -557,6 +561,7 @@ fn launch_calculation(
     expected_revision: u64,
     source: Option<(JobRequest, Option<String>)>,
     optimize: bool,
+    remote_port: Option<u16>,
 ) -> Result<WorkspaceSnapshot, String> {
     let runner = app.state::<Scheduler>();
     let gate = runner.gate.lock().map_err(|e| e.to_string())?;
@@ -586,6 +591,7 @@ fn launch_calculation(
         };
         if retry_of.is_none() {
             request.optimize = optimize;
+            request.remote_port = remote_port;
         }
         app.state::<CatalogState>()
             .get()?
@@ -654,6 +660,7 @@ fn set_queue_paused(app: tauri::AppHandle, paused: bool) -> Result<WorkspaceSnap
 #[tauri::command]
 fn cancel_queued_job(app: tauri::AppHandle, id: String) -> Result<WorkspaceSnapshot, String> {
     app.state::<CatalogState>().get()?.cancel_queued(&id)?;
+    app.state::<Scheduler>().wake();
     let _ = app.emit("job-history-changed", ());
     let snapshot = {
         let state = app.state::<AppState>();
@@ -707,7 +714,7 @@ async fn retry_job(
 ) -> Result<WorkspaceSnapshot, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let request = app.state::<CatalogState>().get()?.retry_source(&id)?;
-        launch_calculation(app, expected_revision, Some((request, None)), false)
+        launch_calculation(app, expected_revision, Some((request, None)), false, None)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -850,10 +857,11 @@ pub fn run() {
                 .ok_or_else(|| std::io::Error::other("Missing main window configuration"))?;
             tauri::WebviewWindowBuilder::from_config(app, main_config)?.build()?;
             Scheduler::start(app.handle().clone());
-            panel_windows::setup(app.handle());
+            panel_windows::setup(app.handle()).map_err(std::io::Error::other)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            research::ask_research,
             update_viewport,
             detach_viewport,
             workspace_snapshot,

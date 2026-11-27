@@ -15,6 +15,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+mod legacy;
+
 const PAGE_SIZE: usize = 20;
 const MAX_ARTIFACT: u64 = 64 * 1024 * 1024;
 const FILES: [&str; 3] = ["input.json", "result.json", "result.h5"];
@@ -33,32 +35,22 @@ pub struct Catalog {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobRecord {
-    pub optimize: bool,
-    pub neb: Option<bool>,
-    pub transition: bool,
-    pub thermochemistry: bool,
-    pub refinement: Option<crate::refinement::Method>,
-    pub dynamics: Option<crate::dynamics::Input>,
-    pub solution: Option<crate::thermochemistry::Solvent>,
-    pub solution_path: Option<crate::thermochemistry::Solvent>,
-    pub stoichiometry: bool,
-    pub mace: bool,
-    pub mace_reference: Option<crate::mace_reference::Selection>,
-    pub escalation: Option<crate::escalation::Input>,
-    pub xtb_followup: Option<crate::xtb_followup::Policy>,
-    pub multiplicity: Option<u32>,
+    #[serde(flatten)]
+    pub job: QueueItem,
     pub resumable: bool,
-    pub sequence: i64,
-    pub id: String,
-    pub name: String,
-    pub formula: String,
-    pub status: String,
     pub created_at: i64,
     pub error: Option<String>,
     pub energy_hartree: Option<f64>,
     pub retry_of: Option<String>,
     pub legacy: bool,
-    pub settings: Option<crate::settings::CalculationSettings>,
+}
+
+impl std::ops::Deref for JobRecord {
+    type Target = QueueItem;
+
+    fn deref(&self) -> &QueueItem {
+        &self.job
+    }
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +61,7 @@ pub struct JobPage {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueItem {
+    pub remote_port: Option<u16>,
     pub optimize: bool,
     pub neb: Option<bool>,
     pub transition: bool,
@@ -90,6 +83,42 @@ pub struct QueueItem {
     pub formula: String,
     pub status: String,
 }
+impl QueueItem {
+    fn from_row(row: &rusqlite::Row<'_>, json: &str) -> rusqlite::Result<Self> {
+        let request = saved_request(json);
+        let optimize = request
+            .as_ref()
+            .map_or_else(|| is_optimization(json), |job| job.optimize);
+        let request = request.as_ref();
+        Ok(Self {
+            remote_port: request.and_then(|job| job.remote_port),
+            sequence: row.get(0)?,
+            id: row.get(1)?,
+            name: row.get(2)?,
+            formula: row.get(3)?,
+            status: row.get(4)?,
+            settings: request
+                .filter(|job| job.method != crate::mace::METHOD)
+                .map(JobRequest::effective_settings),
+            neb: request.and_then(|job| job.neb.as_ref().map(|path| path.climb)),
+            dynamics: request.and_then(|job| job.dynamics.clone()),
+            solution: request.and_then(|job| job.solution),
+            xtb_followup: request.and_then(|job| job.xtb_followup.clone()),
+            escalation: request.and_then(|job| job.escalation.clone()),
+            mace_reference: request.and_then(|job| job.mace_reference.clone()),
+            mace: request.is_some_and(|job| job.method == crate::mace::METHOD),
+            stoichiometry: request.is_some_and(|job| job.stoichiometry.is_some()),
+            solution_path: request
+                .and_then(|job| job.solution_path.as_ref().map(|path| path.solvent)),
+            refinement: request.and_then(|job| job.refinement.as_ref().map(|path| path.method)),
+            thermochemistry: request.is_some_and(|job| job.thermochemistry.is_some()),
+            transition: request.is_some_and(|job| job.transition.is_some()),
+            multiplicity: request.map(|job| job.document.spin + 1),
+            optimize,
+        })
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueuePage {
@@ -161,7 +190,7 @@ fn read_json_bytes(path: &Path) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-fn digest(path: &Path) -> Result<(u64, String), String> {
+pub(crate) fn digest(path: &Path) -> Result<(u64, String), String> {
     let metadata = fs::symlink_metadata(path).map_err(storage)?;
     if !metadata.is_file() || metadata.len() > MAX_ARTIFACT {
         return Err("artifact_invalid".into());
@@ -362,6 +391,27 @@ impl Catalog {
         self.connection.lock().map_err(storage)?.execute("INSERT INTO catalog_meta (key,value) VALUES ('queue_paused',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[if paused { "1" } else { "0" }]).map_err(storage)?;
         Ok(())
     }
+    pub(crate) fn pending_remote_cancel(&self) -> Result<Option<(String, u16)>, String> {
+        let row: Option<(String, String)> = self.connection.lock().map_err(storage)?
+            .query_row(
+                "SELECT id,request_json FROM jobs
+                 WHERE status='failed' AND error='remote_cancel_unconfirmed'
+                   AND NOT EXISTS (SELECT 1 FROM catalog_meta WHERE key='queue_paused' AND value='1')
+                 ORDER BY sequence LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional().map_err(storage)?;
+        let Some((id, json)) = row else {
+            return Ok(None);
+        };
+        let request = saved_request(&json).ok_or("job_invalid")?;
+        if id != request.job_id {
+            return Err("job_invalid".into());
+        }
+        Ok(Some((id, request.remote_port.ok_or("job_invalid")?)))
+    }
+
     pub fn queue_page(&self, after: Option<i64>) -> Result<QueuePage, String> {
         let mut connection = self.connection.lock().map_err(storage)?;
         let transaction = connection.transaction().map_err(storage)?;
@@ -381,44 +431,7 @@ impl Catalog {
             .map_err(storage)?;
         let map = |row: &rusqlite::Row<'_>| {
             let json: String = row.get(5)?;
-            let request = saved_request(&json);
-            Ok(QueueItem {
-                sequence: row.get(0)?,
-                id: row.get(1)?,
-                name: row.get(2)?,
-                formula: row.get(3)?,
-                status: row.get(4)?,
-                settings: request
-                    .as_ref()
-                    .filter(|job| job.method != crate::mace::METHOD)
-                    .map(JobRequest::effective_settings),
-                neb: request
-                    .as_ref()
-                    .and_then(|job| job.neb.as_ref().map(|path| path.climb)),
-                dynamics: request.as_ref().and_then(|job| job.dynamics.clone()),
-                solution: request.as_ref().and_then(|job| job.solution),
-                xtb_followup: request.as_ref().and_then(|job| job.xtb_followup.clone()),
-                escalation: request.as_ref().and_then(|job| job.escalation.clone()),
-                mace_reference: request.as_ref().and_then(|job| job.mace_reference.clone()),
-                mace: request
-                    .as_ref()
-                    .is_some_and(|job| job.method == crate::mace::METHOD),
-                stoichiometry: request
-                    .as_ref()
-                    .is_some_and(|job| job.stoichiometry.is_some()),
-                solution_path: request
-                    .as_ref()
-                    .and_then(|job| job.solution_path.as_ref().map(|path| path.solvent)),
-                refinement: request
-                    .as_ref()
-                    .and_then(|job| job.refinement.as_ref().map(|path| path.method)),
-                thermochemistry: request
-                    .as_ref()
-                    .is_some_and(|job| job.thermochemistry.is_some()),
-                transition: request.as_ref().is_some_and(|job| job.transition.is_some()),
-                multiplicity: request.map(|job| job.document.spin + 1),
-                optimize: is_optimization(&json),
-            })
+            QueueItem::from_row(row, &json)
         };
         let active=transaction.query_row("SELECT sequence,id,name,formula,status,request_json FROM jobs WHERE status IN ('running','cancelling') ORDER BY sequence LIMIT 1",[],map).optional().map_err(storage)?;
         let mut items = {
@@ -485,7 +498,7 @@ impl Catalog {
             Ok((request, directory)) => {
                 transaction
                     .execute(
-                        "UPDATE jobs SET status='running' WHERE id=?1 AND status='queued'",
+                        "UPDATE jobs SET status='running',error=NULL WHERE id=?1 AND status='queued'",
                         [&id],
                     )
                     .map_err(storage)?;
@@ -509,25 +522,29 @@ impl Catalog {
     }
     pub fn cancel_queued(&self, id: &str) -> Result<(), String> {
         check_id(id)?;
-        let changed = self
+        // A recovered remote job may still be running even though it is queued locally.
+        let (status, error): (String, Option<String>) = self
             .connection
             .lock()
             .map_err(storage)?
-            .execute(
-                "UPDATE jobs SET status='cancelled',error=NULL WHERE id=?1 AND status='queued'",
+            .query_row(
+                "UPDATE jobs SET
+                    status=CASE WHEN error='remote_reconnect' THEN 'failed' ELSE 'cancelled' END,
+                    error=CASE WHEN error='remote_reconnect' THEN 'remote_cancel_unconfirmed' ELSE NULL END
+                 WHERE id=?1 AND status='queued' RETURNING status,error",
                 [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .map_err(storage)?;
-        if changed != 1 {
-            return Err("job_not_queued".into());
-        }
+            .optional()
+            .map_err(storage)?
+            .ok_or("job_not_queued")?;
         let _ = atomic_json(
             &self.directory(id)?.join("status.json"),
             &JobSnapshot {
                 id: id.into(),
-                status: "cancelled".into(),
+                status,
                 cycle: 0,
-                error: None,
+                error,
             },
         );
         Ok(())
@@ -537,18 +554,12 @@ impl Catalog {
         let mut statement=connection.prepare("SELECT sequence,id,name,formula,status,created_at,error,energy_hartree,retry_of,legacy,request_json FROM jobs WHERE (?1 IS NULL OR sequence < ?1) ORDER BY sequence DESC LIMIT ?2").map_err(storage)?;
         let mut items = statement
             .query_map(params![before, (PAGE_SIZE + 1) as i64], |row| {
-                let id: String = row.get(1)?;
-                let status: String = row.get(4)?;
                 let json: String = row.get(10)?;
-                let request = saved_request(&json);
-                let optimize = is_optimization(&json);
-                let neb = request
-                    .as_ref()
-                    .and_then(|job| job.neb.as_ref().map(|path| path.climb));
-                let resumable = (optimize || neb.is_some())
-                    && can_resume(&status)
-                    && self.directory(&id).is_ok_and(|dir| {
-                        dir.join(if neb.is_some() {
+                let job = QueueItem::from_row(row, &json)?;
+                let resumable = (job.optimize || job.neb.is_some())
+                    && can_resume(&job.status)
+                    && self.directory(&job.id).is_ok_and(|dir| {
+                        dir.join(if job.neb.is_some() {
                             "neb-checkpoint.json"
                         } else {
                             CHECKPOINT
@@ -556,45 +567,13 @@ impl Catalog {
                         .is_file()
                     });
                 Ok(JobRecord {
-                    optimize,
+                    job,
                     resumable,
-                    neb,
-                    dynamics: request.as_ref().and_then(|job| job.dynamics.clone()),
-                    solution: request.as_ref().and_then(|job| job.solution),
-                    xtb_followup: request.as_ref().and_then(|job| job.xtb_followup.clone()),
-                    escalation: request.as_ref().and_then(|job| job.escalation.clone()),
-                    mace_reference: request.as_ref().and_then(|job| job.mace_reference.clone()),
-                    mace: request
-                        .as_ref()
-                        .is_some_and(|job| job.method == crate::mace::METHOD),
-                    stoichiometry: request
-                        .as_ref()
-                        .is_some_and(|job| job.stoichiometry.is_some()),
-                    solution_path: request
-                        .as_ref()
-                        .and_then(|job| job.solution_path.as_ref().map(|path| path.solvent)),
-                    refinement: request
-                        .as_ref()
-                        .and_then(|job| job.refinement.as_ref().map(|path| path.method)),
-                    thermochemistry: request
-                        .as_ref()
-                        .is_some_and(|job| job.thermochemistry.is_some()),
-                    transition: request.as_ref().is_some_and(|job| job.transition.is_some()),
-                    sequence: row.get(0)?,
-                    id,
-                    name: row.get(2)?,
-                    formula: row.get(3)?,
-                    status,
                     created_at: row.get(5)?,
                     error: row.get(6)?,
                     energy_hartree: row.get(7)?,
                     retry_of: row.get(8)?,
                     legacy: row.get(9)?,
-                    settings: request
-                        .as_ref()
-                        .filter(|job| job.method != crate::mace::METHOD)
-                        .map(JobRequest::effective_settings),
-                    multiplicity: request.map(|job| job.document.spin + 1),
                 })
             })
             .map_err(storage)?
@@ -922,7 +901,11 @@ impl Catalog {
         for id in ids {
             let (request, status, _) = self.row(&id)?;
             if status == "cancelling" {
-                self.fail(&id, "cancelled", None)?;
+                if request.remote_port.is_some() {
+                    self.fail(&id, "failed", Some("remote_cancel_unconfirmed"))?;
+                } else {
+                    self.fail(&id, "cancelled", None)?;
+                }
                 continue;
             }
             // Only our receipt, written after successful child exit, authorizes success recovery.
@@ -937,111 +920,13 @@ impl Catalog {
                         Some(&receipt),
                     )?;
                 }
+                Err(_) if request.remote_port.is_some() => {
+                    // Reuse the original immutable ID and FIFO sequence after explicit resume.
+                    self.update(&id, "queued", Some("remote_reconnect"), None, None)?;
+                }
                 Err(_) => self.fail(&id, "interrupted", Some("job_interrupted"))?,
             }
         }
-        Ok(())
-    }
-    fn import_legacy(&self) -> Result<(), String> {
-        let done: bool = self
-            .connection
-            .lock()
-            .map_err(storage)?
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM catalog_meta WHERE key='legacy_imported')",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(storage)?;
-        if done {
-            return Ok(());
-        }
-        let mut entries = fs::read_dir(self.root.join("jobs"))
-            .map_err(storage)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(storage)?;
-        entries.sort_by_key(|entry| {
-            (
-                entry.metadata().and_then(|m| m.modified()).ok(),
-                entry.file_name(),
-            )
-        });
-        for entry in entries {
-            let id = entry.file_name().to_string_lossy().into_owned();
-            if check_id(&id).is_err() || !entry.file_type().map_err(storage)?.is_dir() {
-                continue;
-            }
-            let existing = self.row(&id).ok();
-            if existing
-                .as_ref()
-                .is_some_and(|(_, status, receipt)| status != "interrupted" || receipt.is_some())
-            {
-                continue;
-            }
-            let Ok(request) = read_json::<JobRequest>(&entry.path().join("input.json")) else {
-                continue;
-            };
-            if request.job_id != id || request.validate().is_err() {
-                continue;
-            }
-            let created = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_millis().min(i64::MAX as u128) as i64);
-            let has_receipt = fs::symlink_metadata(entry.path().join("completion.json")).is_ok();
-            if existing.is_none() {
-                self.insert(&request, "interrupted", None, !has_receipt, created)?;
-            }
-            let status = read_json::<JobSnapshot>(&entry.path().join("status.json"))
-                .ok()
-                .filter(|s| s.id == id);
-            if let Some(status) = status.as_ref().filter(|s| {
-                ["failed", "cancelled", "timed_out", "cancelling"].contains(&s.status.as_str())
-            }) {
-                let terminal = if status.status == "cancelling" {
-                    "cancelled"
-                } else {
-                    &status.status
-                };
-                self.update(&id, terminal, status.error.as_deref(), None, None)?;
-            } else if has_receipt {
-                // Reindexing must preserve an existing baseline, never rehash changed files as new truth.
-                match self.verify(&request, None) {
-                    Ok(calculation) => {
-                        let receipt = digest(&entry.path().join("completion.json"))?.1;
-                        self.update(
-                            &id,
-                            "succeeded",
-                            None,
-                            Some(calculation.energy_hartree),
-                            Some(&receipt),
-                        )?;
-                    }
-                    Err(_) => self.update(&id, "corrupt", Some("artifact_invalid"), None, None)?,
-                }
-            } else if status.as_ref().is_some_and(|s| s.status == "succeeded") {
-                if let Ok(calculation) = read_json::<Calculation>(&entry.path().join("result.json"))
-                {
-                    self.update(&id, "running", None, None, None)?;
-                    if self.complete(&request, &calculation).is_ok() {
-                        continue;
-                    }
-                }
-                self.update(&id, "corrupt", Some("artifact_invalid"), None, None)?;
-            } else {
-                self.update(&id, "interrupted", Some("job_interrupted"), None, None)?;
-            }
-        }
-        self.connection
-            .lock()
-            .map_err(storage)?
-            .execute(
-                "INSERT INTO catalog_meta (key,value) VALUES ('legacy_imported','1')",
-                [],
-            )
-            .map_err(storage)?;
         Ok(())
     }
 }

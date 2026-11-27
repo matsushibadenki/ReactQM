@@ -84,7 +84,7 @@ footer { min-height: 40px; margin-top: 8px; }
   .error { background: #382725; border-color: #68423e; color: #f4b1aa; }
 }
 .molecular-view { margin-top: 14px; }
-.native-viewport { height: 290px; width: 100%; background: #edf1f5; display: grid; place-items: center; color: #657080; font-size: 13px; touch-action: none; cursor: grab; user-select: none; }
+.native-viewport { height: clamp(300px, 52vh, 620px); width: 100%; border-radius: 6px; background: #edf1f5; display: grid; place-items: center; color: #657080; font-size: 13px; touch-action: none; cursor: grab; user-select: none; }
 .native-viewport:active { cursor: grabbing; }
 .native-viewport:focus-visible { outline: 2px solid #3574c4; outline-offset: 3px; }
 .viewport-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; }
@@ -101,7 +101,7 @@ footer { min-height: 40px; margin-top: 8px; }
 .xyz-editor form { border: 0; }
 .molecule-summary { margin-top: 10px; }
 .metrics { margin-bottom: 8px; gap: 20px; }
-@media (max-width: 700px) { .native-viewport { height: 250px; } }
+@media (max-width: 700px) { .native-viewport { height: clamp(220px, 45vh, 350px); } }
 @media (prefers-color-scheme: dark) {
   .native-viewport { background: #242c37; color: #a5afbd; }
   .viewport-status { color: #a5afbd; }
@@ -222,8 +222,7 @@ main { padding-top: 0; }
 .panel-actions button, .layout-tools button { padding: 4px 5px; min-height: 28px; font-size: 11px; }
 .panel-actions button svg, .layout-tools button svg { width: 16px; height: 16px; }
 .panel-actions button { border: 0; }
-.result-help { display: flex; justify-content: flex-end; height: 0; position: relative; top: 12px; }
-.dock-panel .method { margin-top: 16px; padding-right: 30px; }
+
 .dock-panel .history-panel { border: 0; margin-top: 10px; padding-top: 0; }
 .dock-divider { grid-column: 2; min-height: 380px; height: 100%; touch-action: none; cursor: col-resize; position: relative; }
 .dock-divider::after { content: ''; position: absolute; width: 2px; height: 40px; border-radius: 2px; background: #cbd1d8; top: 50%; left: 5px; }
@@ -352,3 +351,23 @@ main { padding-top: 0; }
 .stoichiometry-form label { display: grid; gap: 4px; }
 .stoichiometry-term { display: grid; grid-template-columns: minmax(0, 1fr) 4rem auto; gap: 6px; margin-bottom: 4px; }
 .stoichiometry-term select, .stoichiometry-term input, .stoichiometry-form select { width: 100%; min-width: 0; }
+
+.research-question { grid-column: 1 / -1; }
+.research-answer { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.molecule-inspector { margin-top: 16px; padding: clamp(12px, 2vw, 20px); }
+.molecule-inspector .molecule-summary { margin: 8px 0 2px; }
+.molecule-inspector .metrics { gap: 4px 22px; margin: 0 0 8px; }
+.molecule-inspector .metrics div { padding: 4px 0; }
+.molecule-inspector .metrics dd { font-weight: 600; }
+.calculation-actions { justify-content: space-between; min-height: 32px; }
+.result { margin-top: 2px; padding-top: 10px; }
+.result-overview { margin-bottom: 12px; }
+.result-overview .method { margin: 0 0 8px; overflow-wrap: anywhere; }
+.result-overview .energy { margin-top: 2px; }
+.result-overview output { font-weight: 650; }
+.next-run { margin-top: 14px; border-top: 1px solid #8893a44d; padding-top: 8px; }
+.next-run .calculation-settings { margin: 0 0 8px; }
+.next-run h3 { font-size: 14px; margin: 0; }
+.workflow-tools > details { margin: 6px 0 0 12px; }
+.workflow-tools > summary, .result > details > summary { font-size: 12px; }
